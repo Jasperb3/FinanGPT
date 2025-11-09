@@ -42,8 +42,10 @@ ALLOWED_TABLES = (
     "dividends.history",
     "splits.history",
     "company.metadata",
+    "company.peers",
     "ratios.financial",
     "growth.annual",
+    "user.portfolios",
 )
 
 
@@ -177,22 +179,66 @@ def introspect_schema(conn: duckdb.DuckDBPyConnection, tables: Sequence[str]) ->
 
 
 def build_system_prompt(schema: Mapping[str, Sequence[str]]) -> str:
+    from datetime import date, timedelta
+
     schema_lines = []
     for table, columns in schema.items():
         column_text = ", ".join(columns)
         schema_lines.append(f"- {table}: {column_text}")
     schema_block = "\n".join(schema_lines)
+
+    # Date context for natural language parsing
+    today = date.today()
+    one_year_ago = today - timedelta(days=365)
+    five_years_ago = today - timedelta(days=365*5)
+
+    date_context = f"""
+Date Context (Today: {today.isoformat()}):
+- "last year" or "past year" → WHERE date >= '{one_year_ago.isoformat()}'
+- "last 5 years" → WHERE date >= '{five_years_ago.isoformat()}'
+- "recent" or "latest" → ORDER BY date DESC LIMIT 1
+- "2023" → WHERE YEAR(date) = 2023
+- "YTD" or "year to date" → WHERE YEAR(date) = {today.year}
+"""
+
+    # Peer groups information
+    peer_groups_info = """
+Peer Groups (company.peers table):
+Available peer groups: FAANG, Magnificent Seven, Semiconductors, Cloud Computing,
+Social Media, Streaming, E-commerce, Payment Processors, Electric Vehicles, Airlines,
+Banks, Oil & Gas, Defense, Retail, Pharma, Telecom.
+
+Examples:
+- "Compare FAANG revenue" → JOIN company.peers WHERE peer_group = 'FAANG'
+- "Rank semiconductor companies" → JOIN company.peers WHERE peer_group = 'Semiconductors'
+"""
+
+    # Window functions and statistical aggregations
+    advanced_sql = """
+Advanced SQL Features Allowed:
+- Window functions: RANK(), ROW_NUMBER(), DENSE_RANK(), LAG(), LEAD(), NTILE()
+- Statistical: AVG(), STDDEV(), MEDIAN(), PERCENTILE_CONT()
+- Aggregations: SUM(), COUNT(), MIN(), MAX()
+- Use PARTITION BY and ORDER BY with window functions
+"""
+
     rules = [
         "Return a single SELECT statement that targets the DuckDB tables listed above.",
         "Do not mutate data. DDL/DML, temporary tables, and multi-statement SQL are forbidden.",
         "Always project the date column and cap the LIMIT at 100 rows.",
         "Default to LIMIT 25 when the user does not specify a limit.",
         "Prefer explicit column lists over SELECT * and keep SQL readable.",
+        "Use window functions for rankings, running calculations, and peer comparisons.",
+        "Reference peer groups table for comparative analysis across predefined groups.",
     ]
     rules_block = "\n".join(f"- {rule}" for rule in rules)
+
     return (
         "You are FinanGPT, a disciplined financial data analyst that writes safe DuckDB SQL.\n"
         f"Schema snapshot:\n{schema_block}\n\n"
+        f"{date_context}\n"
+        f"{peer_groups_info}\n"
+        f"{advanced_sql}\n"
         f"Rules:\n{rules_block}\n"
         "Output only SQL, optionally wrapped in ```sql``` fences."
     )

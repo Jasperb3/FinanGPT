@@ -29,6 +29,12 @@ An intelligent financial data pipeline that combines comprehensive data ingestio
 - **Financial Formatting**: Smart formatting ($1.50B, 25.00%, $150.25)
 - **Multiple Exports**: CSV, JSON, Excel with preserved data types
 
+### 🚀 Advanced Query Capabilities
+- **Peer Group Analysis**: 16+ predefined groups (FAANG, Semiconductors, etc.)
+- **Natural Language Dates**: "last year", "YTD", "2023" automatically parsed
+- **Window Functions**: RANK(), LAG(), LEAD(), statistical aggregations
+- **Portfolio Tracking**: Track holdings, calculate returns, analyze performance
+
 ### 🔒 Enterprise-Grade Safety
 - **Data Validation**: US-only, non-ETF, USD-denominated instruments
 - **SQL Guardrails**: Table allow-lists, column validation, read-only queries
@@ -202,6 +208,55 @@ python query.py --no-formatting "show data"
 - High-resolution PNG (300 DPI)
 - Professional styling with grid lines and legends
 
+### Advanced Query Capabilities (Phase 5)
+
+**Peer Group Analysis**:
+```bash
+# Query with predefined peer groups
+python query.py "Compare FAANG companies by revenue"
+python query.py "Rank semiconductor companies by profit margin"
+python query.py "Show average ROE for FAANG vs Semiconductors"
+```
+
+**Available Peer Groups**:
+- FAANG, Magnificent Seven, Semiconductors, Cloud Computing
+- Social Media, Streaming, E-commerce, Payment Processors
+- Electric Vehicles, Airlines, Banks, Oil & Gas
+- Defense, Retail, Pharma, Telecom
+
+**Natural Language Date Parsing**:
+```bash
+# Relative dates automatically understood
+python query.py "Show AAPL revenue for the last 5 years"
+python query.py "Compare Q4 2023 vs Q4 2024 performance"
+python query.py "What's the YTD revenue for tech companies?"
+```
+
+**Window Functions & Rankings**:
+```bash
+# Advanced analytical queries
+python query.py "Show top 10 companies by revenue with their rank"
+python query.py "Calculate 3-period moving average for AAPL revenue"
+python query.py "Find companies in top quartile by ROE"
+```
+
+**Portfolio Tracking**:
+```bash
+# After adding holdings to user.portfolios table
+python query.py "What's my portfolio value today?"
+python query.py "Show unrealized gains for my tech holdings"
+python query.py "Calculate portfolio allocation by sector"
+```
+
+**Adding Portfolio Holdings** (SQL):
+```sql
+INSERT INTO user.portfolios
+    (portfolio_name, ticker, shares, purchase_date, purchase_price, notes)
+VALUES
+    ('Tech Growth', 'AAPL', 100, '2023-01-15', 150.50, 'Long-term hold'),
+    ('Tech Growth', 'MSFT', 50, '2023-02-20', 280.00, 'Cloud play');
+```
+
 ## 🗃️ Data Schema
 
 ### DuckDB Tables
@@ -216,6 +271,8 @@ python query.py --no-formatting "show data"
 | `company` | `metadata` | Company information |
 | `ratios` | `financial` | Derived financial ratios |
 | `growth` | `annual` | YoY growth calculations (view) |
+| `company` | `peers` | Peer group mappings (Phase 5) |
+| `user` | `portfolios` | Portfolio holdings (Phase 5) |
 
 ### Key Financial Ratios
 
@@ -251,6 +308,7 @@ python -m pytest tests/ --cov=. --cov-report=html
 - ✅ Freshness tracking (staleness detection, skip logic)
 - ✅ Conversational interface (history management, error recovery)
 - ✅ Visualization (chart detection, formatting, export functions)
+- ✅ Advanced queries (peer groups, date parsing, window functions)
 
 ## 📚 Example Queries
 
@@ -292,6 +350,18 @@ python -m pytest tests/ --cov=. --cov-report=html
 "Show candlestick chart for TSLA in October 2024"
 "Scatter plot of ROE vs revenue growth for all companies"
 "Plot closing prices for FAANG stocks over the last quarter"
+```
+
+### Advanced Queries (Phase 5)
+```
+"Compare FAANG companies by revenue"
+"Rank semiconductor companies by profit margin"
+"Show average ROE for FAANG vs Semiconductors"
+"Which Magnificent Seven stock has the highest revenue growth?"
+"Show top 10 companies by market cap with their rank"
+"Calculate 3-period moving average for AAPL revenue"
+"What's my Tech Growth portfolio worth today?"
+"Show unrealized gains for my holdings"
 ```
 
 ## 🔧 Troubleshooting
@@ -403,10 +473,12 @@ db.ingestion_metadata.find({"last_fetched": {$lt: threshold.toISOString()}})
 - **Phase 2**: Smart caching & incremental updates
 - **Phase 3**: Conversational query interface with error recovery
 - **Phase 4**: Visual analytics & charting with financial formatting
+- **Phase 5**: Advanced query capabilities (peer groups, window functions, portfolio tracking)
 
 ### Future Enhancements 🚧
-- **Phase 5**: Advanced features (peer group analysis, portfolio tracking)
 - **Phase 6**: Web dashboard (FastAPI + React frontend)
+- **Phase 7**: Real-time data streaming and alerts
+- **Phase 8**: ML-powered insights and predictions
 
 ## 📝 Development
 

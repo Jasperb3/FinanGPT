@@ -316,6 +316,72 @@ def create_growth_view(conn: duckdb.DuckDBPyConnection) -> int:
         return 0
 
 
+def create_peer_groups_table(conn: duckdb.DuckDBPyConnection) -> int:
+    """Create peer groups reference table for comparative analysis.
+
+    Returns:
+        Number of peer group mappings created
+    """
+    try:
+        from peer_groups import get_all_peer_data
+
+        conn.execute("CREATE SCHEMA IF NOT EXISTS company")
+        conn.execute("DROP TABLE IF EXISTS company.peers")
+
+        # Create table
+        conn.execute("""
+            CREATE TABLE company.peers (
+                ticker VARCHAR,
+                peer_group VARCHAR
+            )
+        """)
+
+        # Get peer group data
+        peer_data = get_all_peer_data()
+
+        # Insert data
+        if peer_data:
+            conn.executemany(
+                "INSERT INTO company.peers (ticker, peer_group) VALUES (?, ?)",
+                peer_data
+            )
+
+        count = conn.execute("SELECT COUNT(*) FROM company.peers").fetchone()[0]
+        return count
+    except Exception as e:
+        print(f"Error creating peer groups table: {e}")
+        return 0
+
+
+def create_portfolio_table(conn: duckdb.DuckDBPyConnection) -> int:
+    """Create user portfolio tracking table (initially empty).
+
+    Returns:
+        Number of portfolio entries (0 initially)
+    """
+    try:
+        conn.execute("CREATE SCHEMA IF NOT EXISTS user")
+        conn.execute("DROP TABLE IF EXISTS user.portfolios")
+
+        # Create table
+        conn.execute("""
+            CREATE TABLE user.portfolios (
+                portfolio_name VARCHAR,
+                ticker VARCHAR,
+                shares DOUBLE,
+                purchase_date DATE,
+                purchase_price DOUBLE,
+                notes VARCHAR
+            )
+        """)
+
+        count = conn.execute("SELECT COUNT(*) FROM user.portfolios").fetchone()[0]
+        return count
+    except Exception as e:
+        print(f"Error creating portfolio table: {e}")
+        return 0
+
+
 def main() -> None:
     load_dotenv()
     mongo_uri = os.getenv("MONGO_URI")
@@ -383,6 +449,14 @@ def main() -> None:
         # Create growth view
         growth_rows = create_growth_view(conn)
         log_event(logger, phase="transform.growth_view", rows=growth_rows)
+
+        # Create peer groups table (Phase 5)
+        peer_rows = create_peer_groups_table(conn)
+        log_event(logger, phase="transform.peer_groups", rows=peer_rows)
+
+        # Create portfolio table (Phase 5)
+        portfolio_rows = create_portfolio_table(conn)
+        log_event(logger, phase="transform.portfolios", rows=portfolio_rows)
 
     finally:
         conn.close()
