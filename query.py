@@ -31,6 +31,21 @@ try:
 except ImportError:
     VISUALIZATION_AVAILABLE = False
 
+# Import Phase 6 resilience features
+try:
+    from resilience import (
+        execute_template,
+        handle_ollama_failure,
+        list_templates,
+        load_query_templates,
+        print_debug_info,
+        suggest_tickers,
+        validate_ticker,
+    )
+    RESILIENCE_AVAILABLE = True
+except ImportError:
+    RESILIENCE_AVAILABLE = False
+
 LOGS_DIR = Path("logs")
 DEFAULT_LIMIT = 25
 MAX_LIMIT = 100
@@ -484,23 +499,100 @@ def main() -> None:
         action="store_true",
         help="Disable enhanced financial formatting.",
     )
+    parser.add_argument(
+        "--template",
+        type=str,
+        help="Use a saved query template (Phase 6).",
+    )
+    parser.add_argument(
+        "--template-params",
+        type=str,
+        help="Template parameters as key=value pairs (comma-separated).",
+    )
+    parser.add_argument(
+        "--list-templates",
+        action="store_true",
+        help="List all available query templates.",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable comprehensive debug logging.",
+    )
     args = parser.parse_args()
     load_dotenv()
     model = os.getenv("MODEL_NAME", "phi4:latest")
     base_url = os.getenv("OLLAMA_URL")
     mongo_uri = os.getenv("MONGO_URI", "")
-    if not base_url:
-        raise SystemExit("OLLAMA_URL is not set.")
+
+    # Handle --list-templates flag
+    if args.list_templates:
+        if not RESILIENCE_AVAILABLE:
+            raise SystemExit("Resilience module not available. Install required dependencies.")
+        templates = list_templates()
+        if not templates:
+            print("No query templates found.")
+        else:
+            print("\n📚 Available Query Templates:\n")
+            for tpl in templates:
+                print(f"  • {tpl['name']}: {tpl['description']}")
+        return
+
     conn = duckdb.connect("financial_data.duckdb")
     schema = introspect_schema(conn, ALLOWED_TABLES)
     if not schema:
         conn.close()
         raise SystemExit("No DuckDB tables found. Run transform.py first.")
+
+    logger = configure_logger()
+
+    # Handle template execution
+    if args.template:
+        if not RESILIENCE_AVAILABLE:
+            conn.close()
+            raise SystemExit("Resilience module not available. Install pyyaml: pip install pyyaml")
+
+        # Parse template parameters
+        params = {}
+        if args.template_params:
+            for pair in args.template_params.split(","):
+                if "=" in pair:
+                    key, value = pair.split("=", 1)
+                    params[key.strip()] = value.strip()
+
+        try:
+            columns, rows, sql = execute_template(args.template, params, conn)
+            if args.debug:
+                print(f"\n[DEBUG] Template: {args.template}")
+                print(f"[DEBUG] Parameters: {params}")
+                print(f"[DEBUG] Generated SQL: {sql}\n")
+
+            print(f"📊 Executed template '{args.template}':\n")
+            if VISUALIZATION_AVAILABLE and not args.no_formatting:
+                pretty_print_formatted(columns, rows, use_formatting=True)
+            else:
+                pretty_print(columns, rows)
+
+            log_event(logger, phase="query.template", template=args.template, rows=len(rows))
+        except Exception as exc:
+            log_event(logger, phase="query.template_error", template=args.template, error=str(exc))
+            conn.close()
+            raise SystemExit(f"Template execution failed: {exc}") from exc
+        finally:
+            conn.close()
+        return
+
+    # Normal query flow
+    if not base_url:
+        conn.close()
+        raise SystemExit("OLLAMA_URL is not set.")
+
     question = args.question or input("Query> ").strip()
     if not question:
+        conn.close()
         raise SystemExit("A natural language query is required.")
+
     system_prompt = build_system_prompt(schema)
-    logger = configure_logger()
 
     # Load MongoDB for freshness checking
     mongo_db = None
@@ -508,9 +600,31 @@ def main() -> None:
         mongo_db = load_mongo_database(mongo_uri)
 
     try:
-        response_text = call_ollama(base_url, model, system_prompt, question)
-        sql = extract_sql(response_text)
+        # Try to call Ollama
+        try:
+            response_text = call_ollama(base_url, model, system_prompt, question)
+            sql = extract_sql(response_text)
+
+            if args.debug and RESILIENCE_AVAILABLE:
+                print(f"\n[DEBUG] LLM Response:\n{response_text}\n")
+                print(f"[DEBUG] Extracted SQL:\n{sql}\n")
+
+        except requests.ConnectionError as conn_err:
+            # Graceful degradation when Ollama is down
+            if RESILIENCE_AVAILABLE:
+                sql = handle_ollama_failure(conn_err)
+                if not sql:
+                    conn.close()
+                    raise SystemExit("Exiting due to Ollama connection failure.") from conn_err
+            else:
+                conn.close()
+                raise SystemExit(f"Ollama connection failed: {conn_err}") from conn_err
+
+        # Validate SQL
         sanitised_sql = validate_sql(sql, schema)
+
+        if args.debug:
+            print(f"[DEBUG] Validated SQL:\n{sanitised_sql}\n")
 
         # Check data freshness before executing
         if mongo_db and not args.skip_freshness_check:
@@ -529,9 +643,25 @@ def main() -> None:
                     if user_input not in ("y", "yes"):
                         raise SystemExit("Query cancelled. Please refresh data and try again.")
 
+        # Execute query with timing
+        import time
+        start_time = time.time()
         result = conn.execute(sanitised_sql)
         columns = [desc[0] for desc in result.description]
         rows = result.fetchall()
+        query_time = time.time() - start_time
+
+        # Print debug info if enabled
+        if args.debug and RESILIENCE_AVAILABLE:
+            print_debug_info(
+                system_prompt,
+                question,
+                response_text if 'response_text' in locals() else "(Direct SQL)",
+                sanitised_sql,
+                query_time,
+                len(rows),
+                enabled=True,
+            )
 
         # Use enhanced formatting if available
         if VISUALIZATION_AVAILABLE and not args.no_formatting:
@@ -547,6 +677,9 @@ def main() -> None:
                 chart_path = create_chart(df, chart_type, "Query Result", question)
                 if chart_path:
                     print(f"\n📈 Chart saved: {chart_path}")
+
+        log_event(logger, phase="query.success", sql=sanitised_sql, rows=len(rows))
+
     except (requests.RequestException, ValueError, duckdb.Error) as exc:
         log_event(logger, phase="query.error", error=str(exc))
         raise SystemExit(f"Query failed: {exc}") from exc

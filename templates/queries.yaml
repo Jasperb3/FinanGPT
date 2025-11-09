@@ -1,0 +1,98 @@
+# Query Templates Library
+# Usage: python query.py --template <template_name> --param1 value1 --param2 value2
+
+top_revenue:
+  description: "Top N companies by revenue in a specific year"
+  sql: "SELECT ticker, date, totalRevenue FROM financials.annual WHERE YEAR(date) = {year} ORDER BY totalRevenue DESC LIMIT {limit}"
+  params:
+    - year
+    - limit
+  defaults:
+    limit: 10
+
+ticker_comparison:
+  description: "Compare a specific metric across multiple tickers"
+  sql: "SELECT ticker, date, {metric} FROM financials.annual WHERE ticker IN ({tickers}) ORDER BY date DESC, ticker LIMIT {limit}"
+  params:
+    - metric
+    - tickers
+    - limit
+  defaults:
+    limit: 25
+
+revenue_trends:
+  description: "Show revenue trends for a specific ticker over N years"
+  sql: "SELECT ticker, date, totalRevenue FROM financials.annual WHERE ticker = '{ticker}' AND date >= DATE '{start_date}' ORDER BY date DESC LIMIT {limit}"
+  params:
+    - ticker
+    - start_date
+    - limit
+  defaults:
+    limit: 10
+
+profit_margins:
+  description: "Show profit margins for specific tickers"
+  sql: "SELECT r.ticker, r.date, r.net_margin, r.gross_margin FROM ratios.financial r WHERE r.ticker IN ({tickers}) ORDER BY r.date DESC, r.ticker LIMIT {limit}"
+  params:
+    - tickers
+    - limit
+  defaults:
+    limit: 25
+
+peer_group_comparison:
+  description: "Compare a metric across a peer group"
+  sql: "SELECT f.ticker, f.date, f.{metric} FROM financials.annual f JOIN company.peers p ON f.ticker = p.ticker WHERE p.peer_group = '{peer_group}' AND YEAR(f.date) = {year} ORDER BY f.{metric} DESC LIMIT {limit}"
+  params:
+    - metric
+    - peer_group
+    - year
+    - limit
+  defaults:
+    limit: 25
+
+top_roe:
+  description: "Top companies by Return on Equity"
+  sql: "SELECT r.ticker, r.date, r.roe FROM ratios.financial r WHERE r.date >= DATE '{start_date}' ORDER BY r.roe DESC LIMIT {limit}"
+  params:
+    - start_date
+    - limit
+  defaults:
+    limit: 10
+
+dividend_history:
+  description: "Dividend history for a specific ticker"
+  sql: "SELECT ticker, date, amount FROM dividends.history WHERE ticker = '{ticker}' ORDER BY date DESC LIMIT {limit}"
+  params:
+    - ticker
+    - limit
+  defaults:
+    limit: 25
+
+stock_price_range:
+  description: "Stock prices within a date range"
+  sql: "SELECT ticker, date, close, volume FROM prices.daily WHERE ticker = '{ticker}' AND date BETWEEN DATE '{start_date}' AND DATE '{end_date}' ORDER BY date DESC LIMIT {limit}"
+  params:
+    - ticker
+    - start_date
+    - end_date
+    - limit
+  defaults:
+    limit: 100
+
+growth_leaders:
+  description: "Companies with highest revenue growth"
+  sql: "SELECT ticker, date, revenue_growth_yoy FROM growth.annual WHERE date >= DATE '{start_date}' AND revenue_growth_yoy IS NOT NULL ORDER BY revenue_growth_yoy DESC LIMIT {limit}"
+  params:
+    - start_date
+    - limit
+  defaults:
+    limit: 10
+
+sector_analysis:
+  description: "Average metrics by sector for a specific year"
+  sql: "SELECT m.sector, AVG(f.totalRevenue) as avg_revenue, AVG(r.net_margin) as avg_margin, COUNT(*) as company_count FROM financials.annual f JOIN company.metadata m ON f.ticker = m.ticker LEFT JOIN ratios.financial r ON f.ticker = r.ticker AND f.date = r.date WHERE YEAR(f.date) = {year} GROUP BY m.sector ORDER BY avg_revenue DESC LIMIT {limit}"
+  params:
+    - year
+    - limit
+  defaults:
+    limit: 15

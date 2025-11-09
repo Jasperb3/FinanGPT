@@ -68,6 +68,12 @@ FinanGPT is a Python-based financial data pipeline with an intelligent conversat
 - Statistical aggregations (AVG, STDDEV, MEDIAN)
 - Portfolio tracking table for investment analysis
 
+**Phase 6: Error Resilience & UX Polish** ✅
+- Graceful degradation when Ollama is unavailable (direct SQL, templates, exit)
+- Query template library with 10+ pre-built templates and parameter substitution
+- Ticker validation with autocomplete and spell-check capabilities
+- Debug mode with comprehensive logging and query timing
+
 ## Environment Setup
 
 **Virtual Environment (Required)**:
@@ -1371,6 +1377,343 @@ This context enables the LLM to:
 - Use explicit dates if relative parsing isn't working
 - Check that date column exists in the table
 - Verify date format is YYYY-MM-DD
+
+## Phase 6: Error Resilience & UX Polish
+
+### Overview
+
+Phase 6 introduces robust error handling and user experience improvements, making FinanGPT more resilient to failures and easier to use. Key features include graceful degradation when services are unavailable, pre-built query templates, ticker validation, and comprehensive debug logging.
+
+### Key Features
+
+**Graceful Degradation**:
+- Fallback options when Ollama is unavailable
+- Direct SQL input mode (expert users)
+- Query template library access
+- User choice-driven recovery
+
+**Query Templates**:
+- 10+ pre-built templates for common queries
+- Parameter substitution with defaults
+- YAML-based template library
+- Command-line and programmatic access
+
+**Ticker Validation**:
+- Check ticker existence before query
+- Auto-complete suggestions
+- Spell-check and typo detection
+- Full ticker list retrieval
+
+**Debug Mode**:
+- Comprehensive logging of LLM interactions
+- SQL generation and validation visibility
+- Query timing and performance metrics
+- System prompt inspection
+
+### Query Templates
+
+**Template Library** (`templates/queries.yaml`):
+
+Templates provide reusable query patterns with parameter substitution:
+
+```yaml
+top_revenue:
+  description: "Top N companies by revenue in a specific year"
+  sql: "SELECT ticker, date, totalRevenue FROM financials.annual WHERE YEAR(date) = {year} ORDER BY totalRevenue DESC LIMIT {limit}"
+  params:
+    - year
+    - limit
+  defaults:
+    limit: 10
+```
+
+**Available Templates**:
+- `top_revenue`: Top companies by revenue in a year
+- `ticker_comparison`: Compare metrics across tickers
+- `revenue_trends`: Revenue trends for a ticker
+- `profit_margins`: Profit margins for tickers
+- `peer_group_comparison`: Compare metrics across peer groups
+- `top_roe`: Top companies by Return on Equity
+- `dividend_history`: Dividend payment history
+- `stock_price_range`: Stock prices in a date range
+- `growth_leaders`: Highest revenue growth companies
+- `sector_analysis`: Average metrics by sector
+
+**Usage**:
+
+```bash
+# List all templates
+python query.py --list-templates
+
+# Execute a template
+python query.py --template top_revenue --template-params "year=2023,limit=10"
+
+# Complex template with multiple params
+python query.py --template ticker_comparison \
+  --template-params "metric=netIncome,tickers='AAPL','MSFT','GOOGL',limit=25"
+```
+
+**Programmatic Access**:
+
+```python
+from resilience import load_query_templates, execute_template
+
+# Load templates
+templates = load_query_templates()
+
+# Execute template
+params = {"year": 2023, "limit": 10}
+columns, rows, sql = execute_template("top_revenue", params, conn)
+```
+
+### Graceful Degradation
+
+When Ollama connection fails, users get three options:
+
+**Option 1: Direct SQL Entry (Expert Mode)**:
+```
+⚠️  Ollama is not reachable. Fallback options:
+   1. Enter SQL directly (expert mode)
+   2. Use saved query templates
+   3. Exit and fix connection
+
+Select [1/2/3]: 1
+
+📝 Expert Mode: Enter your SQL query directly
+SQL> SELECT ticker, date, totalRevenue FROM financials.annual WHERE ticker = 'AAPL' ORDER BY date DESC LIMIT 5
+```
+
+**Option 2: Query Templates**:
+```
+Select [1/2/3]: 2
+
+📚 Available query templates:
+   • top_revenue: Top N companies by revenue in a specific year
+   • ticker_comparison: Compare a specific metric across multiple tickers
+   [...]
+
+Template name> top_revenue
+
+📋 Template: Top N companies by revenue in a specific year
+   Required parameters: year, limit
+
+year> 2023
+limit (default: 10)> 5
+
+📊 Generated SQL: SELECT ticker, date, totalRevenue FROM financials.annual WHERE YEAR(date) = 2023 ORDER BY totalRevenue DESC LIMIT 5
+```
+
+**Option 3: Exit**:
+```
+Select [1/2/3]: 3
+
+Exiting. Please check Ollama connection and try again.
+```
+
+**Implementation** (`resilience.py:handle_ollama_failure()`):
+- Detects `requests.ConnectionError` when calling Ollama
+- Presents interactive menu to user
+- Returns SQL string or None based on choice
+- Integrates with both `query.py` and `chat.py`
+
+### Ticker Validation
+
+**Validation Functions** (`resilience.py`):
+
+```python
+def validate_ticker(ticker: str, conn: duckdb.DuckDBPyConnection) -> bool:
+    """Check if ticker exists in company.metadata table."""
+    result = conn.execute(
+        "SELECT COUNT(*) FROM company.metadata WHERE ticker = ?",
+        [ticker.upper()]
+    ).fetchone()
+    return result[0] > 0
+
+def suggest_tickers(partial: str, conn: duckdb.DuckDBPyConnection, limit: int = 10) -> List[str]:
+    """Autocomplete ticker symbols."""
+    results = conn.execute(
+        "SELECT ticker FROM company.metadata WHERE ticker LIKE ? ORDER BY ticker LIMIT ?",
+        [f"{partial.upper()}%", limit]
+    ).fetchall()
+    return [r[0] for r in results]
+
+def get_all_tickers(conn: duckdb.DuckDBPyConnection) -> List[str]:
+    """Get all available tickers."""
+    results = conn.execute("SELECT DISTINCT ticker FROM company.metadata ORDER BY ticker").fetchall()
+    return [r[0] for r in results]
+```
+
+**Usage Examples**:
+
+```python
+# Validate before querying
+if not validate_ticker("AAPL", conn):
+    print("Invalid ticker")
+
+# Auto-complete in interactive UI
+user_input = "A"
+suggestions = suggest_tickers(user_input, conn, limit=5)
+print(f"Did you mean: {', '.join(suggestions)}")
+# Output: AAPL, AMD, AMZN, ABBV, ABT
+
+# Build ticker picker
+all_tickers = get_all_tickers(conn)
+print(f"Available tickers: {len(all_tickers)}")
+```
+
+### Debug Mode
+
+**Command-Line Usage**:
+
+```bash
+# One-shot query with debug
+python query.py --debug "Show AAPL revenue for last 3 years"
+
+# Interactive chat with debug
+python chat.py --debug
+```
+
+**Debug Output Example**:
+
+```
+[DEBUG] System Prompt (1245 chars):
+You are FinanGPT, a disciplined financial data analyst...
+[truncated for brevity]
+
+[DEBUG] User Query: Show AAPL revenue for last 3 years
+
+[DEBUG] LLM Response:
+SELECT ticker, date, totalRevenue
+FROM financials.annual
+WHERE ticker = 'AAPL'
+  AND date >= '2022-11-09'
+ORDER BY date DESC
+LIMIT 3
+
+[DEBUG] Validated SQL:
+SELECT ticker, date, totalRevenue FROM financials.annual WHERE ticker = 'AAPL' AND date >= '2022-11-09' ORDER BY date DESC LIMIT 3
+
+[DEBUG] Query Time: 0.043s
+[DEBUG] Rows Returned: 3
+```
+
+**Debug Functions** (`resilience.py`):
+
+```python
+def print_debug_info(
+    system_prompt: str,
+    user_query: str,
+    llm_response: str,
+    validated_sql: str,
+    query_time: float,
+    rows: int,
+    enabled: bool = False,
+) -> None:
+    """Print comprehensive debug information."""
+    if not enabled:
+        return
+
+    print("\n" + "=" * 70)
+    print(f"[DEBUG] System Prompt ({len(system_prompt)} chars):")
+    print("=" * 70)
+    print(system_prompt[:500] + "..." if len(system_prompt) > 500 else system_prompt)
+    # ... [additional debug output]
+```
+
+### Integration with Existing Features
+
+**Phase 6 enhances previous phases**:
+
+1. **Query Pipeline** (`query.py`):
+   - Template execution bypasses LLM for known patterns
+   - Graceful degradation maintains uptime
+   - Debug mode aids troubleshooting
+
+2. **Chat Interface** (`chat.py`):
+   - Conversation continues with fallback options
+   - Templates provide quick answers
+   - Debug mode traces multi-turn context
+
+3. **Error Recovery** (Phase 3):
+   - Graceful degradation is first line of defense
+   - Auto-retry is second line (existing)
+   - Templates provide third option
+
+### Files Added/Modified
+
+**New Files**:
+- `resilience.py` (350+ lines): Core Phase 6 functionality
+- `templates/queries.yaml`: Query template library
+- `tests/test_error_resilience.py` (400+ lines): Comprehensive test suite
+
+**Modified Files**:
+- `query.py`: Added `--template`, `--list-templates`, `--debug` flags
+- `chat.py`: Added `--debug` flag and graceful degradation
+- `requirements.txt`: Added `pyyaml` dependency
+
+### Testing
+
+**Test Coverage** (`tests/test_error_resilience.py`):
+
+```bash
+# Run Phase 6 tests
+python -m pytest tests/test_error_resilience.py -v
+
+# Test categories:
+# - Query template loading and execution (6 tests)
+# - Ticker validation and autocomplete (4 tests)
+# - Template integration (2 tests)
+# - Graceful degradation (2 tests)
+# - Debug logging (2 tests)
+```
+
+**Key Test Cases**:
+- Template loading from YAML
+- Template execution with parameter substitution
+- Missing parameter error handling
+- Ticker validation (exists/not exists)
+- Autocomplete suggestions
+- Graceful degradation user choices
+- Debug logging enabled/disabled
+
+### Usage Patterns
+
+**For End Users**:
+1. Templates provide quick access to common queries without LLM
+2. Graceful degradation ensures uptime during Ollama outages
+3. Debug mode helps understand query failures
+
+**For Developers**:
+1. Templates simplify testing and CI/CD
+2. Ticker validation prevents common errors
+3. Debug mode aids development and troubleshooting
+
+**For System Administrators**:
+1. Graceful degradation reduces support burden
+2. Templates enable scripting and automation
+3. Debug logs facilitate issue diagnosis
+
+### Troubleshooting
+
+**Templates not loading**:
+- Check `templates/queries.yaml` exists and is valid YAML
+- Install `pyyaml`: `pip install pyyaml`
+- Verify file permissions
+
+**Ticker validation fails**:
+- Ensure `company.metadata` table exists
+- Run `python transform.py` to create/update table
+- Check DuckDB database file is accessible
+
+**Debug output not showing**:
+- Verify `--debug` flag is passed
+- Check that `resilience.py` is importable
+- Ensure no stdout redirection is interfering
+
+**Graceful degradation not working**:
+- Confirm `resilience.py` is in Python path
+- Check for import errors at startup
+- Verify Ollama connection failure is actually occurring
 
 ## Common Issues
 
