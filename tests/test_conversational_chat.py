@@ -162,7 +162,7 @@ class TestQueryRetryLogic:
         )
 
         assert result is not None
-        columns, rows, sql = result
+        columns, rows, sql, df = result
         assert "ticker" in columns
         assert len(rows) > 0
 
@@ -304,7 +304,6 @@ class TestIntegration:
             extract_tickers_from_sql,
             introspect_schema,
             load_mongo_database,
-            pretty_print,
             validate_sql,
         )
 

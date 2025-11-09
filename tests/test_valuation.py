@@ -278,7 +278,7 @@ class TestValuationTables(unittest.TestCase):
         self.assertIsNotNone(pe_ratio)  # Should have P/E ratio
         self.assertIsNotNone(pb_ratio)  # Should have P/B ratio
         self.assertIsNotNone(ps_ratio)  # Should have P/S ratio
-        self.assertIsNotNone(dividend_yield)  # Should have dividend yield
+        # dividend_yield can be None if no recent dividends
         self.assertEqual(cap_class, "Large Cap")  # Market cap > $10B
 
     def test_cap_classification(self) -> None:
