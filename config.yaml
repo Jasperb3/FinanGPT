@@ -1,39 +1,120 @@
 # FinanGPT Configuration File
-# Phase 8: Valuation Metrics & Earnings Intelligence
+# Enhanced with Phase 1 Performance Optimizations
 
 database:
   mongo_uri: mongodb://localhost:27017/financial_data
+  mongo_pool_size: 10          # NEW: Connection pooling for MongoDB
+  mongo_timeout_ms: 5000       # NEW: Connection timeout
   duckdb_path: financial_data.duckdb
+  duckdb_readonly: false       # NEW: Read-only mode option
 
 ollama:
   url: http://localhost:11434
   model: gpt-oss:latest
   timeout: 60
   max_retries: 3
+  temperature: 0.1             # NEW: Low temp for consistent SQL generation
 
 ingestion:
+  # Performance settings
+  max_workers: 10              # Concurrent ingestion workers (1-20 recommended)
+  worker_timeout: 120          # Timeout per ticker in seconds
+  max_tickers_per_batch: 500   # INCREASED from 50 (with concurrent processing)
+
+  # Data settings
   price_lookback_days: 365
   auto_refresh_threshold_days: 7
-  batch_size: 50
+  batch_size: 100              # INCREASED from 50
   retry_backoff: [1, 2, 4]
+  max_retries_per_ticker: 3
+
+  # Market restrictions (NEW - Phase 2)
+  market_restrictions:
+    mode: global  # Options: "global", "us_only", "eu_only", "custom"
+
+    # Custom restrictions (only used if mode = "custom")
+    custom:
+      allowed_countries: []  # Empty = all allowed
+        # Examples: ["United States", "United Kingdom", "Germany"]
+      allowed_currencies: []  # Empty = all allowed
+        # Examples: ["USD", "EUR", "GBP"]
+      allowed_exchanges: []  # Empty = all allowed
+        # Examples: ["NYSE", "NASDAQ", "LSE"]
+
+    # Always excluded (regardless of mode)
+    exclude_etfs: true
+    exclude_mutualfunds: true
+    exclude_crypto: true
+
+transform:
+  # NEW: Streaming transformation settings
+  chunk_size: 1000             # MongoDB → DuckDB chunk size
+  max_memory_mb: 2048          # Abort if exceeds 2GB RAM
+  enable_streaming: true       # Use streaming for large datasets
+
+  # NEW: Data quality
+  run_integrity_checks: true   # Validate MongoDB → DuckDB is lossless
+  run_anomaly_detection: true  # Flag data quality issues
+  integrity_tolerance_pct: 1.0 # Acceptable row count difference (%)
 
 query:
-  default_limit: 25
-  max_limit: 100
+  # Result limits (INCREASED for better performance with caching)
+  default_limit: 50            # INCREASED from 25
+  max_limit: 1000              # INCREASED from 100 (10x)
+
+  # NEW: Caching settings
+  cache_enabled: true          # Enable query result caching
+  cache_ttl_seconds: 300       # Cache TTL (5 minutes)
+  cache_max_entries: 100       # Max cached queries
+
+  # NEW: Large result handling
+  result_streaming: true       # Stream results if >1000 rows
+  streaming_threshold: 1000    # Threshold for streaming
+  streaming_chunk_size: 100    # Rows per chunk when streaming
+
+  # Visualization
   enable_visualizations: true
   chart_output_dir: charts/
-  export_formats: [csv, json, excel]
+  export_formats: [csv, json, excel, parquet]  # Added parquet
 
 features:
   conversational_mode: true
   auto_error_recovery: true
   query_suggestions: true
   portfolio_tracking: false
-  # Phase 8: Valuation & Earnings
-  valuation_metrics: true    # P/E, P/B, P/S, PEG, dividend yield
-  earnings_intelligence: true # EPS estimates vs actuals, earnings calendar
+  valuation_metrics: true      # P/E, P/B, P/S, PEG, dividend yield
+  earnings_intelligence: true  # EPS estimates vs actuals, earnings calendar
+
+# Currency support (NEW - Phase 2)
+currency:
+  base_currency: USD  # Currency for normalized metrics
+  auto_fetch_rates: true  # Automatically fetch FX rates during ingestion
+  fx_cache_days: 365  # Days of historical FX rates to cache
+
+  # Supported currencies
+  supported_currencies:
+    - USD
+    - EUR
+    - GBP
+    - JPY
+    - CNY
+    - CAD
+    - AUD
+    - CHF
+    - HKD
+    - SGD
+    - KRW
+    - INR
 
 logging:
   level: INFO
   directory: logs/
   format: json
+  max_file_size_mb: 10         # NEW: Log rotation
+  backup_count: 5              # NEW: Number of backup logs
+
+# NEW: Performance monitoring
+monitoring:
+  enable_metrics: false        # Prometheus metrics endpoint
+  metrics_port: 9090
+  profile_queries: false       # SQL query profiling (development only)
