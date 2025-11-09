@@ -151,8 +151,9 @@ def load_config(config_path: Optional[str] = None) -> Config:
     2. config.yaml file
     3. Default values
     """
-    # Load environment variables first
-    load_dotenv()
+    # Load environment variables from .env only when using default config path.
+    if config_path is None:
+        load_dotenv()
 
     # Try to load config file
     config_dict: Dict[str, Any] = {}

@@ -2061,10 +2061,6 @@ crontab -e
 - `scripts/daily_refresh.sh` - Automated refresh script (100+ lines)
 - `tests/test_unified_cli.py` - Test suite (200+ lines)
 
-**Modified Files**:
-- `CLAUDE.md` - Added Phase 7 documentation
-- `README.md` - Updated with unified CLI usage
-
 ### Testing
 
 **Test Coverage** (`tests/test_unified_cli.py`):

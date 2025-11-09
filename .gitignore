@@ -7,6 +7,7 @@ tmp/
 .env
 *.duckdb
 tickers.csv
+charts/
 
 # Keep reference documentation and tests
 !reference/

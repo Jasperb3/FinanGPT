@@ -140,7 +140,7 @@ class TestConfigLoader:
         """Test loading configuration from YAML file."""
         config_data = {
             "database": {
-                "mongo_uri": "mongodb://test:27017/test_db",
+                "mongo_uri": "mongodb://localhost:27017/test_db",
             },
             "ollama": {
                 "model": "custom-model",
@@ -153,7 +153,7 @@ class TestConfigLoader:
 
         try:
             config = load_config(temp_path)
-            assert config.mongo_uri == "mongodb://test:27017/test_db"
+            assert config.mongo_uri == "mongodb://localhost:27017/test_db"
             assert config.model_name == "custom-model"
             # Defaults should still be loaded
             assert config.duckdb_path == "financial_data.duckdb"
