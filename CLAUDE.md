@@ -61,6 +61,13 @@ FinanGPT is a Python-based financial data pipeline with an intelligent conversat
 - Multiple export formats (CSV, JSON, Excel)
 - Enhanced terminal output with financial formatting
 
+**Phase 5: Advanced Query Capabilities** ✅
+- Peer group analysis with predefined industry groups (FAANG, Semiconductors, etc.)
+- Natural language date parsing ("last year", "YTD", "2023")
+- Window functions support (RANK, ROW_NUMBER, LAG, LEAD)
+- Statistical aggregations (AVG, STDDEV, MEDIAN)
+- Portfolio tracking table for investment analysis
+
 ## Environment Setup
 
 **Virtual Environment (Required)**:
@@ -1029,6 +1036,341 @@ plt.rcParams['figure.dpi'] = 150  # Different resolution
 - Ensure write permissions for output directory
 - Check disk space availability
 - Verify filename doesn't contain invalid characters
+
+## Phase 5: Advanced Query Capabilities
+
+### Overview
+
+Phase 5 introduces powerful advanced query capabilities that enable sophisticated financial analysis. These features include peer group comparisons, natural language date parsing, window functions for rankings and trends, and portfolio tracking.
+
+### Key Features
+
+**Peer Group Analysis**:
+- Predefined industry peer groups for comparative analysis
+- 16+ peer groups including FAANG, Semiconductors, Cloud Computing, etc.
+- Automatic ticker expansion for group queries
+- Cross-group comparisons and rankings
+
+**Natural Language Date Parsing**:
+- Intelligent interpretation of relative dates
+- Support for "last year", "last 5 years", "YTD", "2023", etc.
+- Dynamic date context injected into system prompt
+- Automatic date filtering without explicit WHERE clauses
+
+**Window Functions & Statistical Aggregations**:
+- Ranking functions: RANK(), ROW_NUMBER(), DENSE_RANK()
+- Analytical functions: LAG(), LEAD(), NTILE()
+- Statistical functions: AVG(), STDDEV(), MEDIAN(), PERCENTILE_CONT()
+- Support for PARTITION BY and ORDER BY
+
+**Portfolio Tracking**:
+- User portfolio table for investment tracking
+- Support for multiple portfolios
+- Purchase tracking with dates and prices
+- Portfolio valuation and performance analysis
+
+### Peer Groups Reference
+
+**Available Peer Groups** (`company.peers` table):
+
+| Peer Group | Tickers | Description |
+|------------|---------|-------------|
+| FAANG | META, AAPL, AMZN, NFLX, GOOGL | Original tech giants |
+| Magnificent Seven | AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA | Current tech leaders |
+| Semiconductors | NVDA, AMD, INTC, TSM, QCOM, AVGO, MU | Chip manufacturers |
+| Cloud Computing | AMZN, MSFT, GOOGL, CRM, ORCL, IBM | Cloud service providers |
+| Social Media | META, SNAP, PINS, TWTR, RDDT | Social platforms |
+| Streaming | NFLX, DIS, PARA, WBD | Video streaming services |
+| E-commerce | AMZN, EBAY, SHOP, ETSY, MELI | Online retailers |
+| Payment Processors | V, MA, PYPL, SQ, AXP | Payment networks |
+| Electric Vehicles | TSLA, RIVN, LCID, F, GM | EV manufacturers |
+| Airlines | AAL, DAL, UAL, LUV, JBLU | Major airlines |
+| Banks | JPM, BAC, WFC, C, GS, MS | Banking institutions |
+| Oil & Gas | XOM, CVX, COP, SLB, BP, SHEL | Energy companies |
+| Defense | LMT, RTX, BA, NOC, GD | Defense contractors |
+| Retail | WMT, TGT, COST, HD, LOW | Major retailers |
+| Pharma | JNJ, PFE, MRK, ABBV, LLY, BMY | Pharmaceutical companies |
+| Telecom | T, VZ, TMUS, CMCSA | Telecommunications |
+
+### Database Schema Additions
+
+**company.peers**:
+```sql
+CREATE TABLE company.peers (
+    ticker VARCHAR,        -- Stock ticker symbol
+    peer_group VARCHAR     -- Group name (e.g., "FAANG", "Semiconductors")
+);
+```
+
+**user.portfolios**:
+```sql
+CREATE TABLE user.portfolios (
+    portfolio_name VARCHAR,   -- Name of portfolio (e.g., "Retirement", "Tech")
+    ticker VARCHAR,          -- Stock ticker
+    shares DOUBLE,           -- Number of shares owned
+    purchase_date DATE,      -- Date of purchase
+    purchase_price DOUBLE,   -- Price per share at purchase
+    notes VARCHAR            -- Optional notes
+);
+```
+
+### Natural Language Date Queries
+
+The system now intelligently parses relative dates in natural language:
+
+**Supported Date Patterns**:
+- **"last year"** or **"past year"** → `WHERE date >= '2024-11-09'` (365 days ago)
+- **"last 5 years"** → `WHERE date >= '2020-11-09'` (5 years ago)
+- **"recent"** or **"latest"** → `ORDER BY date DESC LIMIT 1`
+- **"2023"** → `WHERE YEAR(date) = 2023`
+- **"YTD"** or **"year to date"** → `WHERE YEAR(date) = 2025`
+
+**Example Queries**:
+```
+"Show AAPL revenue for the last 5 years"
+→ Automatically adds: WHERE date >= '2020-11-09'
+
+"What's Apple's latest net income?"
+→ Automatically adds: ORDER BY date DESC LIMIT 1
+
+"Compare tech stocks in 2023"
+→ Automatically adds: WHERE YEAR(date) = 2023
+```
+
+### Window Functions
+
+Phase 5 enables sophisticated analytical queries using window functions:
+
+**Ranking Functions**:
+```sql
+-- Rank companies by revenue within their peer group
+SELECT
+    ticker,
+    peer_group,
+    totalRevenue,
+    RANK() OVER (PARTITION BY peer_group ORDER BY totalRevenue DESC) as rank
+FROM financials.annual f
+JOIN company.peers p ON f.ticker = p.ticker
+WHERE YEAR(date) = 2024;
+```
+
+**Trend Analysis**:
+```sql
+-- Calculate revenue growth using LAG
+SELECT
+    ticker,
+    date,
+    totalRevenue,
+    LAG(totalRevenue) OVER (PARTITION BY ticker ORDER BY date) as prior_revenue,
+    (totalRevenue - LAG(totalRevenue) OVER (PARTITION BY ticker ORDER BY date)) /
+    LAG(totalRevenue) OVER (PARTITION BY ticker ORDER BY date) as growth_rate
+FROM financials.annual;
+```
+
+**Percentile Analysis**:
+```sql
+-- Find companies in top quartile by ROE
+SELECT
+    ticker,
+    roe,
+    NTILE(4) OVER (ORDER BY roe DESC) as quartile
+FROM ratios.financial
+WHERE date = (SELECT MAX(date) FROM ratios.financial);
+```
+
+### Peer Group Query Examples
+
+**Compare FAANG Revenue**:
+```
+Natural language: "Compare FAANG companies by revenue"
+
+Generated SQL:
+SELECT f.ticker, f.date, f.totalRevenue
+FROM financials.annual f
+JOIN company.peers p ON f.ticker = p.ticker
+WHERE p.peer_group = 'FAANG'
+ORDER BY f.date DESC, f.totalRevenue DESC
+LIMIT 25;
+```
+
+**Rank Semiconductor Companies**:
+```
+Natural language: "Rank semiconductor companies by profit margin"
+
+Generated SQL:
+SELECT
+    r.ticker,
+    r.net_margin,
+    RANK() OVER (ORDER BY r.net_margin DESC) as margin_rank
+FROM ratios.financial r
+JOIN company.peers p ON r.ticker = p.ticker
+WHERE p.peer_group = 'Semiconductors'
+AND r.date = (SELECT MAX(date) FROM ratios.financial)
+LIMIT 25;
+```
+
+**Cross-Group Comparison**:
+```
+Natural language: "Compare average ROE for FAANG vs Semiconductors"
+
+Generated SQL:
+SELECT
+    p.peer_group,
+    AVG(r.roe) as avg_roe,
+    STDDEV(r.roe) as stddev_roe
+FROM ratios.financial r
+JOIN company.peers p ON r.ticker = p.ticker
+WHERE p.peer_group IN ('FAANG', 'Semiconductors')
+AND YEAR(r.date) = 2024
+GROUP BY p.peer_group;
+```
+
+### Portfolio Tracking
+
+**Add Holdings to Portfolio**:
+```sql
+INSERT INTO user.portfolios
+    (portfolio_name, ticker, shares, purchase_date, purchase_price, notes)
+VALUES
+    ('Tech Growth', 'AAPL', 100, '2023-01-15', 150.50, 'Long-term hold'),
+    ('Tech Growth', 'MSFT', 50, '2023-02-20', 280.00, 'Cloud play');
+```
+
+**Portfolio Value Query**:
+```
+Natural language: "What's my Tech Growth portfolio worth today?"
+
+Generated SQL:
+SELECT
+    port.ticker,
+    port.shares,
+    port.purchase_price,
+    prices.close as current_price,
+    port.shares * port.purchase_price as cost_basis,
+    port.shares * prices.close as current_value,
+    (prices.close - port.purchase_price) / port.purchase_price as return_pct
+FROM user.portfolios port
+JOIN prices.daily prices ON port.ticker = prices.ticker
+WHERE port.portfolio_name = 'Tech Growth'
+AND prices.date = (SELECT MAX(date) FROM prices.daily)
+LIMIT 25;
+```
+
+**Portfolio Performance**:
+```
+Natural language: "Show unrealized gains for my holdings"
+
+Generated SQL:
+SELECT
+    ticker,
+    shares,
+    purchase_price,
+    shares * (
+        (SELECT close FROM prices.daily p
+         WHERE p.ticker = portfolios.ticker
+         ORDER BY date DESC LIMIT 1) - purchase_price
+    ) as unrealized_gain
+FROM user.portfolios
+WHERE portfolio_name = 'Tech Growth';
+```
+
+### Statistical Aggregations
+
+**Sector Statistics**:
+```sql
+-- Calculate median revenue and standard deviation by sector
+SELECT
+    m.sector,
+    MEDIAN(f.totalRevenue) as median_revenue,
+    AVG(f.totalRevenue) as mean_revenue,
+    STDDEV(f.totalRevenue) as stddev_revenue,
+    COUNT(*) as company_count
+FROM financials.annual f
+JOIN company.metadata m ON f.ticker = m.ticker
+WHERE YEAR(f.date) = 2024
+GROUP BY m.sector;
+```
+
+**Percentile Distributions**:
+```sql
+-- Find 25th, 50th, and 75th percentile for ROE
+SELECT
+    PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY roe) as p25,
+    PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY roe) as median,
+    PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY roe) as p75
+FROM ratios.financial
+WHERE date = (SELECT MAX(date) FROM ratios.financial);
+```
+
+### System Prompt Enhancements
+
+The system prompt now includes:
+
+1. **Dynamic Date Context**: Automatically calculated relative to today's date
+2. **Peer Group Reference**: Lists all available peer groups with examples
+3. **Window Functions Documentation**: Explains available analytical functions
+4. **Example Queries**: Demonstrates peer group and portfolio queries
+
+This context enables the LLM to:
+- Parse natural language dates accurately
+- Recognize peer group names and expand them to tickers
+- Use window functions appropriately for rankings and trends
+- Generate portfolio valuation queries
+
+### Usage Examples
+
+**Time-Based Analysis**:
+```
+"Show AAPL revenue trends for the last 5 years"
+"What was MSFT's latest quarterly income?"
+"Compare 2023 vs 2024 performance for tech stocks"
+```
+
+**Peer Group Analysis**:
+```
+"Compare FAANG companies by market cap"
+"Rank semiconductor companies by revenue growth"
+"Show average profit margins for Cloud Computing companies"
+"Which Magnificent Seven stock has the highest ROE?"
+```
+
+**Advanced Analytics**:
+```
+"Show top 10 companies by revenue with their rank"
+"Calculate 3-period moving average for AAPL revenue"
+"Find companies in the top quartile by ROE"
+"Show revenue growth rate vs prior year for each company"
+```
+
+**Portfolio Queries**:
+```
+"What's my portfolio value today?"
+"Show unrealized gains for my tech holdings"
+"Calculate portfolio allocation by sector"
+"Which of my holdings have positive returns?"
+```
+
+### Troubleshooting
+
+**Peer group not recognized**:
+- Verify the group name matches exactly (case-insensitive)
+- Check available groups: See peer_groups.py for complete list
+- Use `SELECT DISTINCT peer_group FROM company.peers` to see all groups
+
+**Window function errors**:
+- Ensure proper PARTITION BY and ORDER BY clauses
+- Check that window functions are in SELECT clause, not WHERE
+- Verify column references are valid
+
+**Portfolio queries failing**:
+- Ensure portfolio table has data: `SELECT * FROM user.portfolios`
+- Add holdings using INSERT statements
+- Check portfolio_name matches exactly
+
+**Date parsing issues**:
+- Use explicit dates if relative parsing isn't working
+- Check that date column exists in the table
+- Verify date format is YYYY-MM-DD
 
 ## Common Issues
 
