@@ -1,15 +1,15 @@
 # CLAUDE.md
 
 **Project**: FinanGPT - AI-Powered Financial Data Analysis Platform
-**Status**: Production-ready (Phase 9 implemented)
-**Version**: 2.2 (Updated 2025-11-09)
+**Status**: Production-ready (Phase 10 implemented)
+**Version**: 2.3 (Updated 2025-11-09)
 
 ## Quick Reference
 
 **Tech Stack**: Python 3.x | MongoDB | DuckDB | Ollama (LLM) | yfinance
-**Lines of Code**: ~5,700 Python | 11 core modules
+**Lines of Code**: ~5,900 Python | 12 core modules
 **Data**: US equities only (non-ETF, USD-denominated)
-**Latest**: Phase 9 - Analyst intelligence (recommendations, price targets, consensus)
+**Latest**: Phase 10 - Technical analysis (moving averages, RSI, MACD, Bollinger Bands)
 
 ### Core Workflows
 
@@ -90,7 +90,7 @@ analyst_consensus                 # Phase 9: Buy/hold/sell ratings
 growth_estimates                  # Phase 9: Growth forecasts
 ```
 
-**DuckDB Tables** (17 tables/views):
+**DuckDB Tables** (18 tables/views):
 ```
 financials.annual / financials.quarterly  # Statements
 prices.daily                              # OHLCV
@@ -105,6 +105,7 @@ analyst.recommendations                   # Phase 9: Analyst ratings
 analyst.price_targets                     # Phase 9: Price targets
 analyst.consensus                         # Phase 9: Rating consensus
 analyst.growth_estimates                  # Phase 9: Growth forecasts
+technical.indicators                      # Phase 10: Technical analysis
 ```
 
 ### Key Modules
@@ -122,6 +123,7 @@ analyst.growth_estimates                  # Phase 9: Growth forecasts
 | `peer_groups.py` | 79 | 16 predefined peer groups |
 | `valuation.py` | 230 | Phase 8: Valuation metrics & earnings tables |
 | `analyst.py` | 250 | Phase 9: Analyst intelligence tables |
+| `technical.py` | 175 | Phase 10: Technical indicators calculation |
 
 ---
 
@@ -184,6 +186,17 @@ analyst.growth_estimates                  # Phase 9: Growth forecasts
 - **Auto-integration**: Analyst data fetched during standard ingestion flow
 - **New tables**: `analyst.recommendations`, `analyst.price_targets`, `analyst.consensus`, `analyst.growth_estimates`
 
+### Phase 10: Technical Analysis & Price Momentum ✅
+- **Moving averages**: SMA (20/50/200-day) and EMA (12/26-day) for trend identification
+- **RSI indicator**: 14-day RSI (0-100 scale) for overbought/oversold detection
+- **MACD**: Moving Average Convergence Divergence with signal line and histogram
+- **Bollinger Bands**: 20-day bands with 2 standard deviations for volatility analysis
+- **Volume metrics**: 20-day average volume and volume ratio calculations
+- **Price momentum**: Percentage changes over 1d, 5d, 20d, 60d, and 252d periods
+- **52-week analysis**: High/low tracking with percentage distance from current price
+- **Zero data fetching**: All indicators calculated from existing prices.daily using window functions
+- **New table**: `technical.indicators`
+
 ---
 
 ## Critical Implementation Details
@@ -199,7 +212,7 @@ has_usd_financials() # financialCurrency or currency == "USD"
 
 **SQL Guardrails**:
 - SELECT-only (WITH/CTEs allowed if final statement is SELECT)
-- Table allow-list: 18 tables enforced (Phase 9: +4 analyst tables)
+- Table allow-list: 19 tables enforced (Phase 10: +1 technical table)
 - Column existence verified (including CTEs)
 - LIMIT ≤ 100 (default: 25)
 
@@ -360,6 +373,19 @@ pytest tests/test_valuation.py -v          # Phase 8: Valuation & earnings
 "Companies with 5-year growth estimates > 20%"
 "Stocks where analysts raised price targets this month"
 "Find downgrades from major investment banks"
+```
+
+### Technical Analysis (Phase 10)
+```
+"Show AAPL's RSI and MACD indicators for the last month"
+"Find stocks with RSI < 30 (oversold opportunities)"
+"Which stocks are trading above their 200-day moving average?"
+"Show me stocks where price crossed above SMA-50 recently"
+"Find stocks with MACD bullish crossover (MACD > signal)"
+"Show Bollinger Band squeeze patterns (low volatility)"
+"Which stocks are near their 52-week high?"
+"Compare moving averages for FAANG stocks"
+"Find high-momentum stocks (20d % change > 10%)"
 ```
 
 ---
@@ -534,19 +560,20 @@ PRICE_LOOKBACK_DAYS      # Override ingestion.price_lookback_days
 
 ## Project Status
 
-**Production-Ready**: Phase 9 implemented (Analyst Intelligence & Sentiment)
+**Production-Ready**: Phase 10 implemented (Technical Analysis & Price Momentum)
 
-**Phase 9 Completed** (2025-11-09):
-- ✅ Analyst recommendations (upgrades/downgrades with firm tracking)
-- ✅ Price targets (consensus with upside/downside calculations)
-- ✅ Analyst consensus (buy/hold/sell distributions, weighted scores)
-- ✅ Growth estimates (quarterly, annual, 5-year forecasts)
-- ✅ Forward PEG calculations (integrated with valuation metrics)
-- ✅ Auto-integration with existing ingestion pipeline
-- ✅ 4 new DuckDB tables/views, 4 new MongoDB collections
+**Phase 10 Completed** (2025-11-09):
+- ✅ Moving averages (SMA 20/50/200, EMA 12/26)
+- ✅ RSI indicator (14-day with gain/loss calculations)
+- ✅ MACD with signal line and histogram
+- ✅ Bollinger Bands (20-day, 2 standard deviations)
+- ✅ Volume metrics (20-day average, volume ratio)
+- ✅ Price momentum (1d, 5d, 20d, 60d, 252d percentage changes)
+- ✅ 52-week high/low analysis with distance calculations
+- ✅ Pure SQL window function implementation (no API calls)
+- ✅ 1 new DuckDB table
 
-**Next Steps** (potential Phase 10+):
-- Technical analysis (moving averages, RSI, MACD, momentum indicators)
+**Next Steps** (potential Phase 11+):
 - Query intelligence (decomposition, smart errors, autocomplete)
 - Real-time data feeds (WebSocket integration)
 - Web dashboard (React frontend + FastAPI backend)
@@ -556,7 +583,7 @@ PRICE_LOOKBACK_DAYS      # Override ingestion.price_lookback_days
 - Cloud deployment (Docker + Kubernetes)
 
 **Maintainability**:
-- Modular architecture (11 independent modules)
+- Modular architecture (12 independent modules)
 - Clear separation of concerns (ingestion | transformation | query)
 - Backward compatibility maintained (legacy scripts supported)
 
@@ -575,6 +602,8 @@ PRICE_LOOKBACK_DAYS      # Override ingestion.price_lookback_days
 - `config_loader.py` - Configuration management
 - `peer_groups.py` - Peer group definitions
 - `valuation.py` - Phase 8: Valuation metrics & earnings tables
+- `analyst.py` - Phase 9: Analyst intelligence tables
+- `technical.py` - Phase 10: Technical indicators calculation
 
 ### Configuration
 - `config.yaml` - Settings (env var override)
@@ -612,4 +641,4 @@ python finangpt.py status
 
 ---
 
-*Last Updated: 2025-11-09 | Version 2.2 | Phase 9 Complete: Analyst Intelligence & Sentiment*
+*Last Updated: 2025-11-09 | Version 2.3 | Phase 10 Complete: Technical Analysis & Price Momentum*
