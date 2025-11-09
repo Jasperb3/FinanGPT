@@ -806,6 +806,12 @@ def main() -> None:
         growth_estimates_view_rows = create_growth_estimates_table(conn)
         log_event(logger, phase="transform.growth_estimates_view", rows=growth_estimates_view_rows)
 
+        # Create technical indicators table (Phase 10)
+        from technical import create_technical_indicators_table
+
+        technical_rows = create_technical_indicators_table(conn)
+        log_event(logger, phase="transform.technical_indicators", rows=technical_rows)
+
     finally:
         conn.close()
 

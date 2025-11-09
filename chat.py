@@ -121,7 +121,7 @@ def call_ollama_chat(
 def print_welcome_message(schema: Mapping[str, Sequence[str]]) -> None:
     """Display welcome message with available data and example queries."""
     print("\n" + "=" * 70)
-    print("🤖 FinanGPT Interactive Query Interface (Phase 4 - Visual Analytics)")
+    print("🤖 FinanGPT Interactive Query Interface")
     print("=" * 70)
     print("\n🎨 New: Automatic chart generation for time-series and comparison queries!")
     print("   Conversational mode: Ask follow-up questions and refine your queries!")

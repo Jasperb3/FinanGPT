@@ -71,6 +71,8 @@ ALLOWED_TABLES = (
     "analyst.price_targets",
     "analyst.consensus",
     "analyst.growth_estimates",
+    # Phase 10: Technical Analysis
+    "technical.indicators",
 )
 
 
@@ -281,6 +283,40 @@ Examples:
 - "Companies with 5-year growth estimates > 20%" → SELECT * FROM analyst.growth_estimates WHERE next_5yr_growth > 20
 """
 
+    # Phase 10: Technical Analysis information
+    technical_analysis_info = """
+Technical Analysis (Phase 10 - technical.indicators table):
+
+Moving Averages:
+- sma_20, sma_50, sma_200: Simple moving averages
+- ema_12, ema_26: Exponential moving averages
+
+Momentum Indicators:
+- rsi_14: Relative Strength Index (0-100, <30=oversold, >70=overbought)
+- macd, macd_signal, macd_histogram: MACD indicator components
+
+Volatility:
+- bb_upper, bb_middle, bb_lower: Bollinger Bands (20-day, 2 std dev)
+
+Volume:
+- volume_avg_20: 20-day average volume
+- volume_ratio: Current volume / 20-day average
+
+Price Momentum:
+- pct_change_1d, pct_change_5d, pct_change_20d, pct_change_60d, pct_change_252d: % price changes
+
+52-Week Analysis:
+- week_52_high, week_52_low: 52-week high and low prices
+- pct_from_52w_high, pct_from_52w_low: Distance from 52-week extremes (%)
+
+Examples:
+- "Find stocks with golden cross (SMA50 > SMA200)" → SELECT * FROM technical.indicators WHERE sma_50 > sma_200
+- "Show oversold stocks (RSI < 30)" → SELECT * FROM technical.indicators WHERE rsi_14 < 30
+- "Stocks breaking above Bollinger upper band" → SELECT * FROM technical.indicators WHERE close > bb_upper
+- "Positive MACD crossover" → SELECT * FROM technical.indicators WHERE macd > macd_signal AND macd_histogram > 0
+- "Stocks near 52-week lows with high volume" → SELECT * FROM technical.indicators WHERE pct_from_52w_low < 5 AND volume_ratio > 2
+"""
+
     # Window functions and statistical aggregations
     advanced_sql = """
 Advanced SQL Features Allowed:
@@ -308,6 +344,7 @@ Advanced SQL Features Allowed:
         f"{peer_groups_info}\n"
         f"{valuation_earnings_info}\n"
         f"{analyst_intelligence_info}\n"
+        f"{technical_analysis_info}\n"
         f"{advanced_sql}\n"
         f"Rules:\n{rules_block}\n"
         "Output only SQL, optionally wrapped in ```sql``` fences."

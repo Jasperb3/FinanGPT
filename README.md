@@ -59,6 +59,15 @@ An intelligent financial data pipeline that combines comprehensive data ingestio
 - **Analyst Consensus**: Buy/Hold/Sell rating distributions and weighted scores
 - **Growth Estimates**: Quarterly, annual, and 5-year growth forecasts from analysts
 
+### 📊 Technical Analysis & Price Momentum (Phase 10)
+- **Moving Averages**: SMA (20/50/200-day) and EMA (12/26-day) for trend analysis
+- **Momentum Indicators**: RSI (14-day) for overbought/oversold detection
+- **MACD**: Moving Average Convergence Divergence with signal line and histogram
+- **Bollinger Bands**: Volatility bands (20-day, 2 standard deviations)
+- **Volume Analysis**: 20-day average volume and volume ratio metrics
+- **Price Momentum**: Percentage changes over multiple timeframes (1d to 252d)
+- **52-Week Analysis**: High/low tracking with distance calculations
+
 ### 🔒 Enterprise-Grade Safety
 - **Data Validation**: US-only, non-ETF, USD-denominated instruments
 - **SQL Guardrails**: Table allow-lists, column validation, read-only queries
@@ -104,7 +113,7 @@ An intelligent financial data pipeline that combines comprehensive data ingestio
 
    # Terminal 2: Ollama
    ollama serve
-   ollama pull gpt-oss:latest  # or anothewr model if preferred
+   ollama pull gpt-oss:latest  # or another model if preferred
    ```
 
 ### Basic Usage
@@ -574,11 +583,14 @@ db.ingestion_metadata.find({"last_fetched": {$lt: threshold.toISOString()}})
 - **Phase 5**: Advanced query capabilities (peer groups, window functions, portfolio tracking)
 - **Phase 6**: Error resilience & UX polish (query templates, graceful degradation, debug mode)
 - **Phase 7**: Unified workflow & automation (unified CLI, config management, status monitoring, scheduled updates)
+- **Phase 8**: Valuation metrics & earnings intelligence (P/E, P/B, P/S, PEG ratios, earnings surprises)
+- **Phase 9**: Analyst intelligence & sentiment (recommendations, price targets, consensus ratings, growth estimates)
+- **Phase 10**: Technical analysis & price momentum (moving averages, RSI, MACD, Bollinger Bands, volume analysis)
 
 ### Future Enhancements 🚧
-- **Phase 8**: Web dashboard (FastAPI + React frontend)
-- **Phase 9**: Real-time data streaming and alerts
-- **Phase 10**: ML-powered insights and predictions
+- **Phase 11**: Web dashboard (FastAPI + React frontend)
+- **Phase 12**: Real-time data streaming and alerts
+- **Phase 13**: ML-powered insights and predictions
 
 ## 📝 Development
 
