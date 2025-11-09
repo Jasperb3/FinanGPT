@@ -9,17 +9,20 @@ import logging
 import os
 import re
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Sequence, Set
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set
 
 import duckdb
 import requests
 from dotenv import load_dotenv
+from pymongo import MongoClient
+from pymongo.database import Database
 
 LOGS_DIR = Path("logs")
 DEFAULT_LIMIT = 25
 MAX_LIMIT = 100
+DEFAULT_STALENESS_THRESHOLD_DAYS = 7
 ALLOWED_TABLES = (
     "financials.annual",
     "financials.quarterly",
@@ -47,6 +50,94 @@ def configure_logger() -> logging.Logger:
     logger.addHandler(handler)
     logger.addHandler(stream)
     return logger
+
+
+def load_mongo_database(mongo_uri: str) -> Optional[Database]:
+    """Load MongoDB database for freshness checking."""
+    try:
+        client = MongoClient(mongo_uri)
+        db = client.get_default_database()
+        if db:
+            return db
+        path = mongo_uri.rsplit("/", 1)[-1]
+        if path:
+            return client[path]
+    except Exception:
+        pass
+    return None
+
+
+def extract_tickers_from_sql(sql: str) -> List[str]:
+    """Extract ticker symbols from SQL WHERE clauses."""
+    tickers = []
+    # Pattern: ticker = 'AAPL' or ticker IN ('AAPL', 'MSFT')
+    single_ticker = re.findall(r"ticker\s*=\s*['\"]([A-Z]+)['\"]", sql, re.IGNORECASE)
+    tickers.extend(single_ticker)
+
+    # Pattern: ticker IN (...)
+    in_clause = re.search(r"ticker\s+IN\s*\(([^)]+)\)", sql, re.IGNORECASE)
+    if in_clause:
+        in_tickers = re.findall(r"['\"]([A-Z]+)['\"]", in_clause.group(1))
+        tickers.extend(in_tickers)
+
+    return list(set(tickers))  # Deduplicate
+
+
+def check_data_freshness(
+    mongo_db: Optional[Database],
+    tickers: List[str],
+    threshold_days: int = DEFAULT_STALENESS_THRESHOLD_DAYS,
+) -> Dict[str, Any]:
+    """Check if data for the given tickers is stale.
+
+    Returns a dict with:
+    - is_stale: bool
+    - stale_tickers: list of tickers with stale data
+    - freshness_info: dict mapping ticker to days since last fetch
+    """
+    if not mongo_db or not tickers:
+        return {"is_stale": False, "stale_tickers": [], "freshness_info": {}}
+
+    try:
+        metadata_collection = mongo_db["ingestion_metadata"]
+        stale_tickers = []
+        freshness_info = {}
+
+        for ticker in tickers:
+            # Check the most recent fetch across all data types
+            most_recent = metadata_collection.find_one(
+                {"ticker": ticker},
+                sort=[("last_fetched", -1)]
+            )
+
+            if not most_recent:
+                stale_tickers.append(ticker)
+                freshness_info[ticker] = "never fetched"
+                continue
+
+            last_fetched_str = most_recent.get("last_fetched")
+            if not last_fetched_str:
+                stale_tickers.append(ticker)
+                freshness_info[ticker] = "unknown"
+                continue
+
+            last_fetched = datetime.fromisoformat(last_fetched_str.replace("Z", "+00:00"))
+            age = datetime.now(UTC) - last_fetched
+            days_old = age.days
+
+            if days_old >= threshold_days:
+                stale_tickers.append(ticker)
+
+            freshness_info[ticker] = f"{days_old} days old"
+
+        return {
+            "is_stale": len(stale_tickers) > 0,
+            "stale_tickers": stale_tickers,
+            "freshness_info": freshness_info,
+        }
+    except Exception:
+        # If we can't check freshness, don't block the query
+        return {"is_stale": False, "stale_tickers": [], "freshness_info": {}}
 
 
 def log_event(logger: logging.Logger, **payload: Any) -> None:
@@ -320,10 +411,16 @@ def main() -> None:
         nargs="?",
         help="Natural language question (leave empty to enter interactively).",
     )
+    parser.add_argument(
+        "--skip-freshness-check",
+        action="store_true",
+        help="Skip the data freshness check before querying.",
+    )
     args = parser.parse_args()
     load_dotenv()
     model = os.getenv("MODEL_NAME", "phi4:latest")
     base_url = os.getenv("OLLAMA_URL")
+    mongo_uri = os.getenv("MONGO_URI", "")
     if not base_url:
         raise SystemExit("OLLAMA_URL is not set.")
     conn = duckdb.connect("financial_data.duckdb")
@@ -336,10 +433,34 @@ def main() -> None:
         raise SystemExit("A natural language query is required.")
     system_prompt = build_system_prompt(schema)
     logger = configure_logger()
+
+    # Load MongoDB for freshness checking
+    mongo_db = None
+    if mongo_uri and not args.skip_freshness_check:
+        mongo_db = load_mongo_database(mongo_uri)
+
     try:
         response_text = call_ollama(base_url, model, system_prompt, question)
         sql = extract_sql(response_text)
         sanitised_sql = validate_sql(sql, schema)
+
+        # Check data freshness before executing
+        if mongo_db and not args.skip_freshness_check:
+            tickers = extract_tickers_from_sql(sanitised_sql)
+            if tickers:
+                freshness = check_data_freshness(mongo_db, tickers)
+                if freshness["is_stale"]:
+                    print("\n⚠️  Warning: Data may be stale")
+                    print(f"Stale tickers: {', '.join(freshness['stale_tickers'])}")
+                    print("\nFreshness details:")
+                    for ticker, info in freshness["freshness_info"].items():
+                        print(f"  {ticker}: {info}")
+                    print(f"\nTo update data, run: python ingest.py --refresh --tickers {','.join(tickers)}")
+
+                    user_input = input("\nContinue with stale data? [y/N]: ").strip().lower()
+                    if user_input not in ("y", "yes"):
+                        raise SystemExit("Query cancelled. Please refresh data and try again.")
+
         result = conn.execute(sanitised_sql)
         columns = [desc[0] for desc in result.description]
         rows = result.fetchall()

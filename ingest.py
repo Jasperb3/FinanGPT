@@ -12,7 +12,7 @@ import os
 import re
 import sys
 import time
-from datetime import datetime, time as dt_time
+from datetime import datetime, time as dt_time, timedelta
 from numbers import Number
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
@@ -148,6 +148,22 @@ def parse_args() -> argparse.Namespace:
         "--tickers-file",
         help="Path to CSV containing a 'ticker' column.",
     )
+    parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="Only re-ingest data if it's older than the refresh threshold (default: 7 days).",
+    )
+    parser.add_argument(
+        "--refresh-days",
+        type=int,
+        default=7,
+        help="Number of days before data is considered stale (default: 7).",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force re-fetch all data regardless of freshness.",
+    )
     return parser.parse_args()
 
 
@@ -267,12 +283,101 @@ def has_usd_financials(info: Mapping[str, Any]) -> bool:
     return currency == "USD"
 
 
+def get_last_fetch_info(
+    collection: Collection,
+    ticker: str,
+    data_type: str,
+) -> Optional[Mapping[str, Any]]:
+    """Retrieve the last fetch metadata for a specific ticker and data type."""
+    return collection.find_one({"ticker": ticker, "data_type": data_type})
+
+
+def is_data_stale(
+    collection: Collection,
+    ticker: str,
+    data_type: str,
+    threshold_days: int,
+) -> bool:
+    """Check if data is older than threshold_days."""
+    metadata = get_last_fetch_info(collection, ticker, data_type)
+    if not metadata:
+        return True  # No metadata means never fetched, so it's stale
+
+    last_fetched_str = metadata.get("last_fetched")
+    if not last_fetched_str:
+        return True
+
+    last_fetched = datetime.fromisoformat(last_fetched_str.replace("Z", "+00:00"))
+    age = datetime.utcnow() - last_fetched.replace(tzinfo=None)
+    return age.days >= threshold_days
+
+
+def should_skip_ticker(
+    metadata_collection: Collection,
+    ticker: str,
+    refresh_mode: bool,
+    force_mode: bool,
+    refresh_days: int,
+) -> bool:
+    """Determine if we should skip ingesting this ticker based on freshness."""
+    if force_mode:
+        return False  # Never skip in force mode
+
+    if not refresh_mode:
+        return False  # Always ingest if not in refresh mode
+
+    # In refresh mode, skip if all data types are fresh
+    data_types = ["financials_annual", "financials_quarterly", "prices_daily",
+                  "dividends_history", "splits_history", "company_metadata"]
+
+    all_fresh = True
+    for data_type in data_types:
+        if is_data_stale(metadata_collection, ticker, data_type, refresh_days):
+            all_fresh = False
+            break
+
+    return all_fresh
+
+
+def get_last_price_date(
+    prices_collection: Collection,
+    ticker: str,
+) -> Optional[datetime]:
+    """Get the most recent price date for a ticker."""
+    result = prices_collection.find_one(
+        {"ticker": ticker},
+        sort=[("date", -1)],
+    )
+    if not result:
+        return None
+
+    date_str = result.get("date")
+    if not date_str:
+        return None
+
+    return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+
+
 def ingest_symbol(
     symbol: str,
     collections: Mapping[str, Collection],
     logger: logging.Logger,
+    refresh_mode: bool = False,
+    force_mode: bool = False,
+    refresh_days: int = 7,
 ) -> None:
     start = time.time()
+
+    # Check if we should skip this ticker based on freshness
+    if should_skip_ticker(collections["metadata"], symbol, refresh_mode, force_mode, refresh_days):
+        log_event(
+            logger,
+            phase="skip.fresh",
+            ticker=symbol,
+            message=f"Data is fresh (less than {refresh_days} days old), skipping.",
+        )
+        return
+
     attempts = 0
     while attempts < MAX_ATTEMPTS:
         attempts += 1
@@ -311,8 +416,12 @@ def ingest_symbol(
 
             # Fetch and store additional data types
             try:
-                # Price history
-                price_df = fetch_price_history(ticker_obj, symbol)
+                # Price history - use incremental updates if not in force mode
+                last_price_date = None
+                if not force_mode:
+                    last_price_date = get_last_price_date(collections["prices"], symbol)
+
+                price_df = fetch_price_history(ticker_obj, symbol, last_date=last_price_date)
                 if price_df is not None:
                     price_rows = upsert_price_history(collections["prices"], symbol, price_df)
                     log_event(logger, phase="ingest.prices", ticker=symbol, rows=price_rows, duration_ms=_duration_ms(start))
@@ -520,12 +629,35 @@ def _duration_ms(start: float) -> int:
     return int((time.time() - start) * 1000)
 
 
-def fetch_price_history(ticker_obj: Any, symbol: str, lookback_days: int = PRICE_LOOKBACK_DAYS) -> Optional[pd.DataFrame]:
-    """Fetch daily price history (OHLCV) for the ticker."""
+def fetch_price_history(
+    ticker_obj: Any,
+    symbol: str,
+    lookback_days: int = PRICE_LOOKBACK_DAYS,
+    last_date: Optional[datetime] = None,
+) -> Optional[pd.DataFrame]:
+    """Fetch daily price history (OHLCV) for the ticker.
+
+    If last_date is provided, fetches only prices newer than that date (incremental update).
+    Otherwise, fetches the full lookback period.
+    """
     try:
-        history = ticker_obj.history(period=f"{lookback_days}d")
+        if last_date:
+            # Incremental update: fetch from day after last_date until today
+            start_date = (last_date + timedelta(days=1)).date()
+            end_date = datetime.utcnow().date()
+
+            # Don't fetch if we're already up to date
+            if start_date > end_date:
+                return None
+
+            history = ticker_obj.history(start=start_date, end=end_date)
+        else:
+            # Full fetch using lookback period
+            history = ticker_obj.history(period=f"{lookback_days}d")
+
         if history.empty:
             return None
+
         # Reset index to get date as a column
         history = history.reset_index()
         # Ensure date is normalized
@@ -749,6 +881,16 @@ def main() -> None:
     logger = configure_logger()
     args = parse_args()
     tickers = read_tickers(args, logger)
+
+    # Log mode information
+    if args.force:
+        log_event(logger, phase="start", mode="force", message="Force mode: re-fetching all data regardless of freshness")
+    elif args.refresh:
+        log_event(logger, phase="start", mode="refresh", refresh_days=args.refresh_days,
+                  message=f"Refresh mode: only updating data older than {args.refresh_days} days")
+    else:
+        log_event(logger, phase="start", mode="normal", message="Normal mode: fetching all tickers")
+
     with MongoClient(mongo_uri) as client:
         database = load_database(client, mongo_uri)
         annual_collection = database["raw_annual"]
@@ -778,7 +920,14 @@ def main() -> None:
             "metadata": ingestion_metadata_collection,
         }
         for ticker in tickers:
-            ingest_symbol(ticker, collections, logger)
+            ingest_symbol(
+                ticker,
+                collections,
+                logger,
+                refresh_mode=args.refresh,
+                force_mode=args.force,
+                refresh_days=args.refresh_days,
+            )
 
 
 if __name__ == "__main__":

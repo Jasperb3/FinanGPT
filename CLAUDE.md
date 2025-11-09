@@ -54,6 +54,24 @@ python transform.py
 python query.py "annual net income for AAPL over the last 5 years"
 ```
 
+**Smart Caching & Incremental Updates (Phase 2)**:
+```bash
+# Refresh mode: only update data older than 7 days (default threshold)
+python ingest.py --refresh --tickers AAPL,MSFT
+
+# Custom refresh threshold (e.g., 3 days)
+python ingest.py --refresh --refresh-days 3 --tickers-file tickers.csv
+
+# Force mode: re-fetch all data regardless of freshness
+python ingest.py --force --tickers AAPL,MSFT
+
+# Query with automatic freshness checking (warns if data is stale)
+python query.py "show AAPL stock price trends"
+
+# Skip freshness check in query
+python query.py --skip-freshness-check "show AAPL stock price trends"
+```
+
 **Testing**:
 ```bash
 # Run all tests
@@ -257,6 +275,151 @@ All scripts emit structured JSON logs to `logs/`:
   "attempts": 1,
   "rows": 5,
   "duration_ms": 1234
+}
+```
+
+## Phase 2: Smart Caching & Incremental Updates
+
+### Data Freshness Tracking
+
+FinanGPT tracks the freshness of all ingested data using the `ingestion_metadata` collection in MongoDB:
+
+```json
+{
+  "ticker": "AAPL",
+  "data_type": "prices_daily",
+  "last_fetched": "2025-11-09T10:30:00Z",
+  "status": "success",
+  "record_count": 365
+}
+```
+
+**Tracked data types**:
+- `financials_annual` - Annual financial statements
+- `financials_quarterly` - Quarterly financial statements
+- `prices_daily` - Daily stock prices (OHLCV)
+- `dividends_history` - Dividend payment history
+- `splits_history` - Stock split history
+- `company_metadata` - Company information
+
+### Ingestion Modes
+
+**Normal Mode** (default):
+```bash
+python ingest.py --tickers AAPL,MSFT
+```
+- Fetches all data for specified tickers
+- Updates existing records (upsert behavior)
+- Uses full lookback period for prices (365 days default)
+
+**Refresh Mode** (`--refresh`):
+```bash
+python ingest.py --refresh --refresh-days 7 --tickers AAPL,MSFT
+```
+- Only processes tickers with data older than threshold (default: 7 days)
+- Skips tickers with fresh data to reduce API load
+- Uses incremental price updates (only new data since last fetch)
+- Significantly faster for frequent updates
+
+**Force Mode** (`--force`):
+```bash
+python ingest.py --force --tickers AAPL,MSFT
+```
+- Re-fetches all data regardless of freshness
+- Uses full lookback period (no incremental updates)
+- Use when data quality issues are suspected
+
+### Incremental Price Updates
+
+When not in force mode, price fetching is incremental:
+
+```python
+# Gets last stored price date from MongoDB
+last_price_date = get_last_price_date(collection, "AAPL")
+# Only fetches prices after last_price_date
+price_df = fetch_price_history(ticker_obj, "AAPL", last_date=last_price_date)
+```
+
+**Benefits**:
+- Reduces yfinance API load
+- Faster ingestion (seconds instead of minutes)
+- Enables frequent automated updates (hourly/daily via cron)
+
+### Query Freshness Checking
+
+`query.py` automatically checks data freshness before executing queries:
+
+```python
+# Extracts tickers from SQL: WHERE ticker = 'AAPL'
+tickers = extract_tickers_from_sql(sql)
+
+# Checks MongoDB metadata for staleness
+freshness = check_data_freshness(mongo_db, tickers, threshold_days=7)
+
+if freshness["is_stale"]:
+    print("⚠️  Warning: Data may be stale")
+    print(f"Stale tickers: {', '.join(freshness['stale_tickers'])}")
+    user_input = input("Continue with stale data? [y/N]: ")
+```
+
+**Skip freshness check**:
+```bash
+python query.py --skip-freshness-check "show AAPL revenue"
+```
+
+### Staleness Detection Logic
+
+A ticker's data is considered stale if:
+1. **Never fetched**: No metadata record exists for the ticker
+2. **Threshold exceeded**: `last_fetched` is older than `threshold_days` (default: 7)
+
+The staleness check uses the most recent fetch across all data types:
+- If any data type is stale, the ticker is flagged
+- Provides detailed freshness info per ticker
+
+### Automated Refresh Workflow
+
+**Daily scheduled update** (via cron):
+```bash
+# crontab entry: Run at 6 PM weekdays
+0 18 * * 1-5 /path/to/.venv/bin/python /path/to/ingest.py --refresh --tickers-file tickers.csv
+
+# After ingestion, transform to DuckDB
+0 18 * * 1-5 /path/to/.venv/bin/python /path/to/transform.py
+```
+
+**Manual refresh** (on-demand):
+```bash
+# Update all tickers that are >7 days old
+python ingest.py --refresh --tickers-file tickers.csv
+
+# Update specific ticker if stale
+python ingest.py --refresh --tickers AAPL
+
+# Transform updated data
+python transform.py
+```
+
+### Monitoring Data Freshness
+
+**Check freshness via MongoDB**:
+```javascript
+// MongoDB shell
+use financial_data
+db.ingestion_metadata.find({"ticker": "AAPL"}).sort({"last_fetched": -1})
+
+// Find stale data (>7 days)
+var threshold = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+db.ingestion_metadata.find({"last_fetched": {$lt: threshold.toISOString()}})
+```
+
+**Freshness in logs**:
+```json
+{
+  "ts": "2025-11-09T10:00:00Z",
+  "phase": "skip.fresh",
+  "ticker": "AAPL",
+  "message": "Data is fresh (less than 7 days old), skipping."
 }
 ```
 
