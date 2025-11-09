@@ -4,13 +4,55 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-FinanGPT is a Python-based financial data pipeline that:
-- Ingests US-only stock financials from yfinance (annual & quarterly statements)
-- Ingests price history (OHLCV), dividends, stock splits, and company metadata
-- Stores raw data in MongoDB with strict validation (non-ETF, USD-only, US-listed)
-- Transforms data into DuckDB for analytics with derived ratios and growth metrics
-- Tracks data freshness for automated refresh monitoring
-- Provides a natural language query interface via LLM→SQL using Ollama
+FinanGPT is a Python-based financial data pipeline with an intelligent conversational query interface. It combines comprehensive data ingestion, smart caching, and natural language querying to provide a powerful financial analysis platform.
+
+### Core Capabilities
+
+**Data Ingestion**:
+- US-only stock financials from yfinance (annual & quarterly statements)
+- Price history (OHLCV), dividends, stock splits, and company metadata
+- MongoDB storage with strict validation (non-ETF, USD-only, US-listed)
+- Smart caching with incremental updates for fast refresh
+- Automated freshness tracking for all data types
+
+**Data Analytics**:
+- DuckDB transformation for high-performance analytics
+- Derived financial ratios (ROE, ROA, profit margins, cash conversion, etc.)
+- Year-over-year growth calculations (revenue, income)
+- Multiple data schemas (financials, prices, dividends, splits, metadata)
+
+**Query Interface**:
+- Natural language to SQL via LLM (Ollama)
+- **One-shot queries** (`query.py`) - Single question with freshness checking
+- **Conversational mode** (`chat.py`) - Multi-turn dialogue with context memory
+- Intelligent error recovery with automatic retry
+- Built-in freshness warnings and data validation
+
+### Enhancement Phases (Completed)
+
+**Phase 1: Rich Data Sources** ✅
+- Extended beyond basic financials to include:
+  - Daily stock prices (OHLCV)
+  - Dividend payment history
+  - Stock split events
+  - Company metadata (sector, industry, employees, etc.)
+- Derived analytics tables:
+  - Financial ratios (9 key metrics)
+  - Year-over-year growth view
+
+**Phase 2: Smart Caching & Incremental Updates** ✅
+- Data freshness tracking with MongoDB metadata
+- Three ingestion modes: Normal, Refresh (smart caching), Force
+- Incremental price updates (10-100x faster)
+- Pre-query staleness warnings
+- Automated refresh workflows
+
+**Phase 3: Conversational Query Interface** ✅
+- Interactive chat mode with multi-turn context
+- Conversation history management (20 message rolling window)
+- Intelligent error recovery (3 automatic retries with LLM feedback)
+- Query suggestions and examples at startup
+- Special commands: `/help`, `/clear`, `/exit`
 
 ## Environment Setup
 
@@ -70,6 +112,26 @@ python query.py "show AAPL stock price trends"
 
 # Skip freshness check in query
 python query.py --skip-freshness-check "show AAPL stock price trends"
+```
+
+**Conversational Query Interface (Phase 3)**:
+```bash
+# Interactive chat mode with context memory
+python chat.py
+
+# Example conversation:
+# You: Show AAPL revenue for last 5 years
+# AI: [Shows revenue data]
+# You: Now compare to MSFT
+# AI: [Shows comparison with same time range]
+
+# Chat with freshness check disabled
+python chat.py --skip-freshness-check
+
+# Special commands within chat:
+# /help    - Show help message
+# /clear   - Clear conversation history
+# /exit    - Exit chat mode
 ```
 
 **Testing**:
@@ -422,6 +484,182 @@ db.ingestion_metadata.find({"last_fetched": {$lt: threshold.toISOString()}})
   "message": "Data is fresh (less than 7 days old), skipping."
 }
 ```
+
+## Phase 3: Conversational Query Interface
+
+### Overview
+
+Phase 3 introduces an interactive chat interface (`chat.py`) that provides a conversational experience for querying financial data. Unlike the one-shot `query.py`, the chat interface maintains conversation context, remembers previous queries, and can handle follow-up questions naturally.
+
+### Key Features
+
+**Multi-Turn Conversation**:
+- Maintains conversation history with the LLM
+- Remembers previous queries and results
+- Supports contextual follow-ups without repeating information
+- Rolling window of 20 most recent messages to prevent token overflow
+
+**Intelligent Error Recovery**:
+- Automatic retry on query failures (up to 3 attempts)
+- Feeds error messages back to LLM for self-correction
+- Users never see internal SQL validation errors
+- LLM learns from mistakes within the session
+
+**Query Suggestions**:
+- Welcome screen with example queries
+- Built-in help system (`/help` command)
+- Contextual tips on failures
+
+**Special Commands**:
+- `/help` - Display help message and usage tips
+- `/clear` - Reset conversation history
+- `/exit` or `/quit` - Exit the chat interface
+
+### Usage
+
+**Start Interactive Session**:
+```bash
+python chat.py
+```
+
+**Example Conversation**:
+```
+💬 Query> Show AAPL revenue for last 5 years
+
+📊 Generated SQL: SELECT ticker, date, totalRevenue FROM financials.annual WHERE ticker = 'AAPL' ORDER BY date DESC LIMIT 5
+
+✅ Results (5 rows):
+
+ticker | date       | totalRevenue
+-------|------------|---------------
+AAPL   | 2024-09-30 | 394328000000
+AAPL   | 2023-09-30 | 383285000000
+...
+
+💬 Query> Now compare to MSFT
+
+📊 Generated SQL: SELECT ticker, date, totalRevenue FROM financials.annual WHERE ticker IN ('AAPL', 'MSFT') ORDER BY ticker, date DESC LIMIT 10
+
+✅ Results (10 rows):
+[Shows both AAPL and MSFT with same time range]
+```
+
+### Conversation History Management
+
+The chat interface maintains conversation context using a rolling window:
+
+```python
+conversation_history = [
+    {"role": "system", "content": system_prompt},
+    {"role": "user", "content": "Show AAPL revenue"},
+    {"role": "assistant", "content": "Query executed..."},
+    {"role": "system", "content": "Query returned 5 rows"},
+    {"role": "user", "content": "Now compare to MSFT"},
+    # ... continues
+]
+```
+
+**History Limits**:
+- Maximum 20 messages retained (excluding system prompt)
+- Older messages automatically trimmed to prevent token overflow
+- System prompt always preserved
+- Most recent context prioritized
+
+### Error Recovery Flow
+
+When a query fails, the system:
+
+1. **Attempt 1**: Generate SQL from user query
+2. **Validation Fail**: Detect error (e.g., invalid table)
+3. **Feedback**: Send error details to LLM
+4. **Attempt 2**: LLM generates revised SQL
+5. **Success**: Execute and return results
+
+**Example**:
+```
+User: "Show me all the stocks"
+Attempt 1: SELECT * FROM stocks  ← Invalid table
+Feedback: "Table 'stocks' not in allow-list"
+Attempt 2: SELECT * FROM company.metadata LIMIT 25  ← Success
+```
+
+### Integration with Phase 2
+
+The chat interface inherits all Phase 2 features:
+- **Freshness checking**: Warns about stale data before execution
+- **Smart caching**: Benefits from incremental updates
+- **Skip option**: `--skip-freshness-check` flag available
+
+### Commands Reference
+
+| Command | Action |
+|---------|--------|
+| `/help` | Show help message and tips |
+| `/clear` | Clear conversation history |
+| `/exit` | Exit chat mode |
+| `/quit` | Exit chat mode (alias) |
+
+### Chat Logs
+
+All chat sessions are logged to `logs/chat_YYYYMMDD.log`:
+
+```json
+{
+  "ts": "2025-11-09T15:30:00Z",
+  "phase": "chat.start",
+  "model": "phi4:latest"
+}
+{
+  "ts": "2025-11-09T15:30:15Z",
+  "phase": "query.success",
+  "attempt": 1,
+  "sql": "SELECT ticker, totalRevenue FROM financials.annual LIMIT 10",
+  "rows": 10
+}
+{
+  "ts": "2025-11-09T15:35:00Z",
+  "phase": "chat.end"
+}
+```
+
+### Best Practices
+
+**For Better Results**:
+1. Be specific with ticker symbols (AAPL vs "Apple")
+2. Mention time ranges when relevant
+3. Use action verbs: "show", "compare", "list"
+4. Build on previous queries with follow-ups
+
+**Example Good Conversation**:
+```
+✅ "Show AAPL revenue trends for last 5 years"
+✅ "Now add profit margins for the same period"
+✅ "How does this compare to MSFT?"
+```
+
+**Example Poor Conversation**:
+```
+❌ "Tell me about Apple"  (too vague)
+❌ "What's the data?"  (no context)
+❌ "Show everything"  (no specificity)
+```
+
+### Troubleshooting
+
+**Chat doesn't remember context**:
+- Check if conversation history is being trimmed too aggressively
+- Try `/clear` to reset and start fresh
+- Ensure Ollama is running and model supports conversation
+
+**Queries fail repeatedly**:
+- Use `/help` to see valid query patterns
+- Check `logs/chat_YYYYMMDD.log` for error details
+- Try one-shot mode: `python query.py "your question"`
+
+**Ollama timeout**:
+- Increase timeout in code if needed (default: 60s)
+- Check Ollama server status: `ollama list`
+- Verify model is loaded: `ollama run phi4:latest`
 
 ## Common Issues
 
