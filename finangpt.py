@@ -24,6 +24,7 @@ import duckdb
 from pymongo import MongoClient
 
 from config_loader import load_config
+from time_utils import parse_utc_timestamp
 
 
 def get_status(config_path: Optional[str] = None) -> dict:
@@ -68,7 +69,7 @@ def get_status(config_path: Optional[str] = None) -> dict:
             if most_recent:
                 last_fetched_str = most_recent.get("last_fetched")
                 if last_fetched_str:
-                    last_fetched = datetime.fromisoformat(last_fetched_str.replace("Z", "+00:00"))
+                    last_fetched = parse_utc_timestamp(last_fetched_str)
                     age_days = (datetime.now(UTC) - last_fetched).days
                     freshness_data[ticker] = {
                         "days_old": age_days,

@@ -20,6 +20,8 @@ from dotenv import load_dotenv
 from pymongo import MongoClient
 from pymongo.database import Database
 
+from time_utils import parse_utc_timestamp
+
 # Import visualization functions (optional - only used if available)
 try:
     from visualize import (
@@ -162,7 +164,7 @@ def check_data_freshness(
                 freshness_info[ticker] = "unknown"
                 continue
 
-            last_fetched = datetime.fromisoformat(last_fetched_str.replace("Z", "+00:00"))
+            last_fetched = parse_utc_timestamp(last_fetched_str)
             age = datetime.now(UTC) - last_fetched
             days_old = age.days
 

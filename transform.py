@@ -18,6 +18,7 @@ from pymongo import MongoClient
 from pymongo.collection import Collection
 from pymongo.database import Database
 
+from time_utils import parse_utc_timestamp
 LOGS_DIR = Path("logs")
 DUCKDB_PATH = "financial_data.duckdb"
 ANNUAL_TABLE = "financials.annual"
@@ -71,8 +72,7 @@ def parse_iso_date(value: Any) -> date:
     iso_str = str(value or "")
     if not iso_str:
         raise ValueError("Missing date field.")
-    iso_str = iso_str.replace("Z", "+00:00") if iso_str.endswith("Z") else iso_str
-    parsed = datetime.fromisoformat(iso_str)
+    parsed = parse_utc_timestamp(iso_str)
     return parsed.date()
 
 

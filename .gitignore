@@ -8,6 +8,7 @@ tmp/
 *.duckdb
 tickers.csv
 charts/
+archive/
 
 # Keep reference documentation and tests
 !reference/

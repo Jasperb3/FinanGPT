@@ -27,6 +27,8 @@ from pymongo.collection import Collection
 from pymongo.database import Database
 from pymongo.errors import PyMongoError
 
+from time_utils import parse_utc_timestamp
+
 MAX_TICKERS_PER_RUN = 50
 MAX_ATTEMPTS = 3
 EST = ZoneInfo("US/Eastern")
@@ -307,7 +309,7 @@ def is_data_stale(
     if not last_fetched_str:
         return True
 
-    last_fetched = datetime.fromisoformat(last_fetched_str.replace("Z", "+00:00")).astimezone(UTC)
+    last_fetched = parse_utc_timestamp(last_fetched_str)
     age = datetime.now(UTC) - last_fetched
     return age.days >= threshold_days
 
@@ -355,7 +357,7 @@ def get_last_price_date(
     if not date_str:
         return None
 
-    return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+    return parse_utc_timestamp(date_str)
 
 
 def ingest_symbol(

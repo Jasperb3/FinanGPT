@@ -29,6 +29,7 @@ from query import (
     extract_tickers_from_sql,
     introspect_schema,
     load_mongo_database,
+    pretty_print,
     validate_sql,
 )
 

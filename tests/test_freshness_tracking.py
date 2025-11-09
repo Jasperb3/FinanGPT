@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Dict
 from unittest.mock import MagicMock, patch
 
@@ -75,7 +75,7 @@ class TestFreshnessTracking:
         """Test that recent data is not considered stale."""
         mock_collection = MagicMock(spec=Collection)
         # Data fetched 2 days ago
-        recent_time = datetime.utcnow() - timedelta(days=2)
+        recent_time = datetime.now(UTC) - timedelta(days=2)
         mock_collection.find_one.return_value = {
             "ticker": "AAPL",
             "data_type": "prices_daily",
@@ -90,7 +90,7 @@ class TestFreshnessTracking:
         """Test that old data is considered stale."""
         mock_collection = MagicMock(spec=Collection)
         # Data fetched 10 days ago
-        old_time = datetime.utcnow() - timedelta(days=10)
+        old_time = datetime.now(UTC) - timedelta(days=10)
         mock_collection.find_one.return_value = {
             "ticker": "AAPL",
             "data_type": "prices_daily",
@@ -135,7 +135,7 @@ class TestFreshnessTracking:
 
         # Mock all data types as fresh
         def mock_find_one(query):
-            recent_time = datetime.utcnow() - timedelta(days=2)
+            recent_time = datetime.now(UTC) - timedelta(days=2)
             return {
                 "ticker": query["ticker"],
                 "data_type": query["data_type"],
@@ -161,7 +161,7 @@ class TestFreshnessTracking:
         # Mock some data types as stale
         def mock_find_one(query):
             if query["data_type"] == "prices_daily":
-                old_time = datetime.utcnow() - timedelta(days=10)
+                old_time = datetime.now(UTC) - timedelta(days=10)
                 return {
                     "ticker": query["ticker"],
                     "data_type": query["data_type"],
@@ -246,7 +246,7 @@ class TestQueryFreshnessChecking:
         mock_collection = MagicMock(spec=Collection)
         mock_db.__getitem__.return_value = mock_collection
 
-        recent_time = datetime.utcnow() - timedelta(days=2)
+        recent_time = datetime.now(UTC) - timedelta(days=2)
         mock_collection.find_one.return_value = {
             "ticker": "AAPL",
             "data_type": "prices_daily",
@@ -265,7 +265,7 @@ class TestQueryFreshnessChecking:
         mock_collection = MagicMock(spec=Collection)
         mock_db.__getitem__.return_value = mock_collection
 
-        old_time = datetime.utcnow() - timedelta(days=10)
+        old_time = datetime.now(UTC) - timedelta(days=10)
         mock_collection.find_one.return_value = {
             "ticker": "AAPL",
             "data_type": "prices_daily",
@@ -300,9 +300,9 @@ class TestIncrementalPriceUpdates:
         """Test that incremental updates skip when already up-to-date."""
         # This would be tested with actual yfinance integration
         # For now, we test the logic that determines if a fetch should occur
-        last_date = datetime.utcnow()
+        last_date = datetime.now(UTC)
         start_date = (last_date + timedelta(days=1)).date()
-        end_date = datetime.utcnow().date()
+        end_date = datetime.now(UTC).date()
 
         # If start_date > end_date, we should skip the fetch
         should_skip = start_date > end_date
@@ -310,9 +310,9 @@ class TestIncrementalPriceUpdates:
 
     def test_incremental_update_fetches_new_data(self):
         """Test that incremental updates fetch when data is missing."""
-        last_date = datetime.utcnow() - timedelta(days=5)
+        last_date = datetime.now(UTC) - timedelta(days=5)
         start_date = (last_date + timedelta(days=1)).date()
-        end_date = datetime.utcnow().date()
+        end_date = datetime.now(UTC).date()
 
         # If start_date <= end_date, we should fetch
         should_fetch = start_date <= end_date
