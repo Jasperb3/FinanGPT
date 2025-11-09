@@ -61,6 +61,11 @@ ALLOWED_TABLES = (
     "ratios.financial",
     "growth.annual",
     "user.portfolios",
+    # Phase 8: Valuation & Earnings
+    "valuation.metrics",
+    "earnings.history",
+    "earnings.calendar",
+    "earnings.calendar_upcoming",
 )
 
 
@@ -228,6 +233,24 @@ Examples:
 - "Rank semiconductor companies" → JOIN company.peers WHERE peer_group = 'Semiconductors'
 """
 
+    # Phase 8: Valuation & Earnings information
+    valuation_earnings_info = """
+Valuation Metrics (valuation.metrics table):
+Ratios: pe_ratio, pb_ratio, ps_ratio, peg_ratio, dividend_yield, payout_ratio
+Classifications: cap_class (Large Cap, Mid Cap, Small Cap)
+
+Earnings Intelligence (earnings.history table):
+Fields: eps_estimate, eps_actual, eps_surprise, surprise_pct, revenue_estimate, revenue_actual
+
+Earnings Calendar (earnings.calendar and earnings.calendar_upcoming tables):
+Fields: earnings_date, period_ending, estimate
+
+Examples:
+- "Find undervalued tech stocks with P/E < 15" → SELECT * FROM valuation.metrics WHERE pe_ratio < 15
+- "Show stocks that beat earnings" → SELECT * FROM earnings.history WHERE eps_surprise > 0
+- "Upcoming earnings this week" → SELECT * FROM earnings.calendar_upcoming WHERE earnings_date <= CURRENT_DATE + 7
+"""
+
     # Window functions and statistical aggregations
     advanced_sql = """
 Advanced SQL Features Allowed:
@@ -253,6 +276,7 @@ Advanced SQL Features Allowed:
         f"Schema snapshot:\n{schema_block}\n\n"
         f"{date_context}\n"
         f"{peer_groups_info}\n"
+        f"{valuation_earnings_info}\n"
         f"{advanced_sql}\n"
         f"Rules:\n{rules_block}\n"
         "Output only SQL, optionally wrapped in ```sql``` fences."

@@ -1,5 +1,5 @@
 # FinanGPT Configuration File
-# Phase 7: Unified Workflow & Automation
+# Phase 8: Valuation Metrics & Earnings Intelligence
 
 database:
   mongo_uri: mongodb://localhost:27017/financial_data
@@ -29,6 +29,9 @@ features:
   auto_error_recovery: true
   query_suggestions: true
   portfolio_tracking: false
+  # Phase 8: Valuation & Earnings
+  valuation_metrics: true    # P/E, P/B, P/S, PEG, dividend yield
+  earnings_intelligence: true # EPS estimates vs actuals, earnings calendar
 
 logging:
   level: INFO

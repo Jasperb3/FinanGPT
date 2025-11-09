@@ -1,14 +1,15 @@
 # CLAUDE.md
 
 **Project**: FinanGPT - AI-Powered Financial Data Analysis Platform
-**Status**: Production-ready (All 7 phases complete)
-**Version**: 2.0 (Updated 2025-11-09)
+**Status**: Production-ready (Phase 8 implemented)
+**Version**: 2.1 (Updated 2025-11-09)
 
 ## Quick Reference
 
 **Tech Stack**: Python 3.x | MongoDB | DuckDB | Ollama (LLM) | yfinance
-**Lines of Code**: ~4,000 Python | 9 core modules | 9 test suites
+**Lines of Code**: ~5,000 Python | 10 core modules | 10 test suites
 **Data**: US equities only (non-ETF, USD-denominated)
+**Phase 8**: Valuation metrics (P/E, P/B, dividend yield) + Earnings intelligence
 
 ### Core Workflows
 
@@ -75,16 +76,18 @@ ollama pull gpt-oss:latest
 
 ### Database Schemas
 
-**MongoDB Collections** (7):
+**MongoDB Collections** (9):
 ```
 raw_annual, raw_quarterly         # Financial statements
 stock_prices_daily                # OHLCV data
 dividends_history, splits_history # Corporate actions
 company_metadata                  # Company info
 ingestion_metadata                # Freshness tracking
+earnings_history                  # Phase 8: EPS estimates vs actuals
+earnings_calendar                 # Phase 8: Upcoming earnings dates
 ```
 
-**DuckDB Tables** (9 tables/views):
+**DuckDB Tables** (13 tables/views):
 ```
 financials.annual / financials.quarterly  # Statements
 prices.daily                              # OHLCV
@@ -94,21 +97,26 @@ company.peers                             # Peer groups (16 groups)
 ratios.financial                          # 9 derived ratios
 growth.annual (VIEW)                      # YoY growth
 user.portfolios                           # Portfolio tracking
+valuation.metrics                         # Phase 8: P/E, P/B, P/S, PEG, dividend yield
+earnings.history (VIEW)                   # Phase 8: Earnings surprises
+earnings.calendar                         # Phase 8: Earnings calendar
+earnings.calendar_upcoming (VIEW)         # Phase 8: Future earnings only
 ```
 
 ### Key Modules
 
 | Module | Lines | Purpose |
 |--------|-------|---------|
-| `ingest.py` | 934 | Data fetching, validation, MongoDB storage |
-| `transform.py` | 502 | MongoDB → DuckDB, derived metrics |
-| `query.py` | 691 | One-shot NL queries, SQL generation |
+| `ingest.py` | 1020 | Data fetching, validation, MongoDB storage |
+| `transform.py` | 580 | MongoDB → DuckDB, derived metrics |
+| `query.py` | 705 | One-shot NL queries, SQL generation |
 | `chat.py` | 466 | Conversational interface (20-msg history) |
 | `visualize.py` | 463 | Charts (4 types), financial formatting, exports |
 | `resilience.py` | 306 | Graceful degradation, templates, validation |
 | `finangpt.py` | 420 | Unified CLI, status monitoring |
 | `config_loader.py` | 204 | YAML config + env var fallback |
 | `peer_groups.py` | 79 | 16 predefined peer groups |
+| `valuation.py` | 230 | Phase 8: Valuation metrics & earnings tables |
 
 ---
 
@@ -153,6 +161,15 @@ user.portfolios                           # Portfolio tracking
 - Status monitoring (health checks, freshness stats, JSON output)
 - Automated refresh script (`scripts/daily_refresh.sh` - cron-ready)
 
+### Phase 8: Valuation Metrics & Earnings Intelligence ✅
+- **Valuation metrics**: P/E, P/B, P/S, PEG ratios calculated from latest prices + financials
+- **Dividend metrics**: Dividend yield, payout ratio (annual basis)
+- **Market cap classification**: Large Cap (>$10B), Mid Cap ($2-10B), Small Cap (<$2B)
+- **Earnings history**: EPS estimates vs actuals, earnings surprises ($ and %)
+- **Earnings calendar**: Upcoming earnings dates with estimates
+- **Auto-integration**: Earnings data fetched during standard ingestion flow
+- **New tables**: `valuation.metrics`, `earnings.history`, `earnings.calendar`
+
 ---
 
 ## Critical Implementation Details
@@ -168,7 +185,7 @@ has_usd_financials() # financialCurrency or currency == "USD"
 
 **SQL Guardrails**:
 - SELECT-only (WITH/CTEs allowed if final statement is SELECT)
-- Table allow-list: 9 tables enforced
+- Table allow-list: 13 tables enforced (Phase 8: +4 new tables)
 - Column existence verified (including CTEs)
 - LIMIT ≤ 100 (default: 25)
 
@@ -255,7 +272,7 @@ python chat.py --debug
 
 ## Testing
 
-**9 test suites** covering all phases:
+**10 test suites** covering all phases:
 
 ```bash
 pytest tests/                              # Run all tests
@@ -263,9 +280,10 @@ pytest tests/test_ingest_filters.py -v     # Ingestion validation
 pytest tests/test_query_sql_guardrails.py -v # SQL security
 pytest tests/test_visualizations.py -v     # Charts + formatting
 pytest tests/test_error_resilience.py -v   # Templates + degradation
+pytest tests/test_valuation.py -v          # Phase 8: Valuation & earnings
 ```
 
-**Coverage**: ETF detection, SQL injection prevention, freshness tracking, chart detection, template execution, config loading
+**Coverage**: ETF detection, SQL injection prevention, freshness tracking, chart detection, template execution, config loading, valuation calculations, earnings data transformation
 
 ---
 
@@ -297,6 +315,25 @@ pytest tests/test_error_resilience.py -v   # Templates + degradation
 "What's my Tech Growth portfolio worth today?"
 "Show unrealized gains for my holdings"
 "Calculate portfolio allocation by sector"
+```
+
+### Valuation Analysis (Phase 8)
+```
+"Find undervalued tech stocks with P/E < 15 and P/B < 2"
+"Show me high dividend yield stocks (>4%) with strong payout ratios"
+"Compare valuation multiples for FAANG companies"
+"Which large-cap stocks have PEG ratio < 1?" (growth at reasonable price)
+"Show stocks with P/S ratio below their sector median"
+```
+
+### Earnings Intelligence (Phase 8)
+```
+"Which companies beat earnings estimates last quarter?"
+"Show AAPL's earnings surprise history for last 2 years"
+"Find stocks that consistently beat estimates (>75% of time)"
+"When is the next earnings call for TSLA?"
+"Show upcoming earnings this week"
+"Find companies with improving earnings surprise trends"
 ```
 
 ---
@@ -471,19 +508,31 @@ PRICE_LOOKBACK_DAYS      # Override ingestion.price_lookback_days
 
 ## Project Status
 
-**Production-Ready**: All 7 phases fully implemented and tested
+**Production-Ready**: Phase 8 implemented (Valuation Metrics & Earnings Intelligence)
 
-**Next Steps** (potential Phase 8+):
+**Phase 8 Completed** (2025-11-09):
+- ✅ Valuation metrics (P/E, P/B, P/S, PEG, dividend yield, payout ratio)
+- ✅ Market cap classification (Large/Mid/Small cap)
+- ✅ Earnings history (EPS estimates vs actuals, surprise metrics)
+- ✅ Earnings calendar (upcoming earnings dates)
+- ✅ Auto-integration with existing ingestion pipeline
+- ✅ 4 new DuckDB tables/views
+- ✅ Comprehensive test suite (test_valuation.py)
+
+**Next Steps** (potential Phase 9+):
+- Analyst intelligence (recommendations, price targets, upgrades/downgrades)
+- Technical analysis (moving averages, RSI, MACD, momentum indicators)
+- Query intelligence (decomposition, smart errors, autocomplete)
 - Real-time data feeds (WebSocket integration)
+- Web dashboard (React frontend + FastAPI backend)
 - Multi-user authentication (user management)
 - Advanced backtesting (portfolio simulation)
-- Custom indicators (technical analysis)
 - API endpoints (REST/GraphQL)
 - Cloud deployment (Docker + Kubernetes)
 
 **Maintainability**:
-- Modular architecture (9 independent modules)
-- Comprehensive test coverage (9 test suites)
+- Modular architecture (10 independent modules)
+- Comprehensive test coverage (10 test suites)
 - Clear separation of concerns (ingestion | transformation | query)
 - Backward compatibility maintained (legacy scripts supported)
 
@@ -501,6 +550,7 @@ PRICE_LOOKBACK_DAYS      # Override ingestion.price_lookback_days
 - `finangpt.py` - Unified CLI
 - `config_loader.py` - Configuration management
 - `peer_groups.py` - Peer group definitions
+- `valuation.py` - Phase 8: Valuation metrics & earnings tables
 
 ### Configuration
 - `config.yaml` - Settings (env var override)
@@ -518,6 +568,7 @@ PRICE_LOOKBACK_DAYS      # Override ingestion.price_lookback_days
 - `tests/test_freshness_tracking.py` - Smart caching
 - `tests/test_conversational_chat.py` - Chat interface
 - `tests/test_visualizations.py` - Charts + formatting
+- `tests/test_valuation.py` - Phase 8: Valuation & earnings
 - `tests/test_advanced_queries.py` - Peer groups + window functions
 - `tests/test_error_resilience.py` - Templates + degradation
 - `tests/test_unified_cli.py` - Config + status
@@ -537,4 +588,4 @@ python finangpt.py status
 
 ---
 
-*Last Updated: 2025-11-09 | Version 2.0 | All Phases Complete*
+*Last Updated: 2025-11-09 | Version 2.1 | Phase 8 Complete: Valuation Metrics & Earnings Intelligence*

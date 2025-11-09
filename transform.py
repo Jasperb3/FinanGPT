@@ -285,6 +285,71 @@ def prepare_metadata_dataframe(documents: Sequence[Mapping[str, Any]]) -> pd.Dat
     return pd.DataFrame(rows)
 
 
+def prepare_earnings_history_dataframe(documents: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
+    """Transform earnings history documents into DataFrame.
+
+    Phase 8: Earnings Intelligence
+    """
+    rows: List[Dict[str, Any]] = []
+    for doc in documents:
+        ticker = doc.get("ticker")
+        date_value = doc.get("date")
+        if not ticker or not date_value:
+            continue
+        try:
+            parsed_date = parse_iso_date(date_value)
+        except ValueError:
+            continue
+
+        row = {
+            "ticker": ticker,
+            "report_date": parsed_date,
+            "fiscal_period": doc.get("fiscal_period"),
+            "eps_estimate": doc.get("eps_estimate"),
+            "eps_actual": doc.get("eps_actual"),
+            "eps_surprise": doc.get("eps_surprise"),
+            "surprise_pct": doc.get("surprise_pct"),
+            "revenue_estimate": doc.get("revenue_estimate"),
+            "revenue_actual": doc.get("revenue_actual"),
+        }
+        rows.append(row)
+
+    if not rows:
+        return pd.DataFrame(columns=["ticker", "report_date", "fiscal_period", "eps_estimate",
+                                      "eps_actual", "eps_surprise", "surprise_pct",
+                                      "revenue_estimate", "revenue_actual"])
+    return pd.DataFrame(rows)
+
+
+def prepare_earnings_calendar_dataframe(documents: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
+    """Transform earnings calendar documents into DataFrame.
+
+    Phase 8: Earnings Calendar
+    """
+    rows: List[Dict[str, Any]] = []
+    for doc in documents:
+        ticker = doc.get("ticker")
+        earnings_date_value = doc.get("earnings_date")
+        if not ticker or not earnings_date_value:
+            continue
+        try:
+            parsed_date = parse_iso_date(earnings_date_value)
+        except ValueError:
+            continue
+
+        row = {
+            "ticker": ticker,
+            "earnings_date": parsed_date,
+            "period_ending": doc.get("period_ending"),
+            "estimate": doc.get("estimate"),
+        }
+        rows.append(row)
+
+    if not rows:
+        return pd.DataFrame(columns=["ticker", "earnings_date", "period_ending", "estimate"])
+    return pd.DataFrame(rows)
+
+
 def create_ratios_table(conn: duckdb.DuckDBPyConnection) -> int:
     """Create derived financial ratios table from annual financials."""
     try:
@@ -432,6 +497,9 @@ def main() -> None:
         dividends_docs = fetch_documents(database["dividends_history"])
         splits_docs = fetch_documents(database["splits_history"])
         metadata_docs = fetch_documents(database["company_metadata"])
+        # Phase 8: Earnings data
+        earnings_history_docs = fetch_documents(database["earnings_history"])
+        earnings_calendar_docs = fetch_documents(database["earnings_calendar"])
 
     # Prepare DataFrames
     annual_frame = prepare_dataframe(annual_docs)
@@ -440,6 +508,9 @@ def main() -> None:
     dividends_frame = prepare_dividends_dataframe(dividends_docs)
     splits_frame = prepare_splits_dataframe(splits_docs)
     metadata_frame = prepare_metadata_dataframe(metadata_docs)
+    # Phase 8: Earnings data
+    earnings_history_frame = prepare_earnings_history_dataframe(earnings_history_docs)
+    earnings_calendar_frame = prepare_earnings_calendar_dataframe(earnings_calendar_docs)
 
     # Transform to DuckDB
     conn = duckdb.connect(DUCKDB_PATH)
@@ -478,6 +549,29 @@ def main() -> None:
             meta_rows = 0
         log_event(logger, phase="transform.metadata", rows=meta_rows)
 
+        # Phase 8: Earnings history
+        conn.execute("CREATE SCHEMA IF NOT EXISTS earnings")
+        if not earnings_history_frame.empty:
+            # Use date-based upsert for earnings history
+            earnings_hist_rows = upsert_dataframe(conn, earnings_history_frame, "earnings.history_raw", "earnings")
+        else:
+            conn.execute("CREATE TABLE IF NOT EXISTS earnings.history_raw (ticker VARCHAR, report_date DATE, fiscal_period VARCHAR, eps_estimate DOUBLE, eps_actual DOUBLE, eps_surprise DOUBLE, surprise_pct DOUBLE, revenue_estimate DOUBLE, revenue_actual DOUBLE)")
+            earnings_hist_rows = 0
+        log_event(logger, phase="transform.earnings_history", rows=earnings_hist_rows)
+
+        # Phase 8: Earnings calendar
+        if not earnings_calendar_frame.empty:
+            # Simple replace for earnings calendar (upcoming dates)
+            conn.register("earnings_calendar_frame", earnings_calendar_frame)
+            conn.execute("DROP TABLE IF EXISTS earnings.calendar")
+            conn.execute("CREATE TABLE earnings.calendar AS SELECT * FROM earnings_calendar_frame")
+            conn.unregister("earnings_calendar_frame")
+            earnings_cal_rows = len(earnings_calendar_frame)
+        else:
+            conn.execute("CREATE TABLE IF NOT EXISTS earnings.calendar (ticker VARCHAR, earnings_date DATE, period_ending VARCHAR, estimate DOUBLE)")
+            earnings_cal_rows = 0
+        log_event(logger, phase="transform.earnings_calendar", rows=earnings_cal_rows)
+
         # Create derived ratios table
         ratio_rows = create_ratios_table(conn)
         log_event(logger, phase="transform.ratios", rows=ratio_rows)
@@ -493,6 +587,20 @@ def main() -> None:
         # Create portfolio table (Phase 5)
         portfolio_rows = create_portfolio_table(conn)
         log_event(logger, phase="transform.portfolios", rows=portfolio_rows)
+
+        # Create valuation metrics table (Phase 8)
+        from valuation import create_valuation_metrics_table, create_earnings_history_table, create_earnings_calendar_view
+
+        valuation_rows = create_valuation_metrics_table(conn)
+        log_event(logger, phase="transform.valuation_metrics", rows=valuation_rows)
+
+        # Create earnings history view (Phase 8)
+        earnings_history_rows = create_earnings_history_table(conn)
+        log_event(logger, phase="transform.earnings_history_view", rows=earnings_history_rows)
+
+        # Create earnings calendar view (Phase 8)
+        earnings_calendar_view_rows = create_earnings_calendar_view(conn)
+        log_event(logger, phase="transform.earnings_calendar_view", rows=earnings_calendar_view_rows)
 
     finally:
         conn.close()

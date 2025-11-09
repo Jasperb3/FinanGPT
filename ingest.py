@@ -447,6 +447,20 @@ def ingest_symbol(
                 log_event(logger, phase="ingest.metadata", ticker=symbol, rows=meta_rows, duration_ms=_duration_ms(start))
                 update_ingestion_metadata(collections["metadata"], symbol, "company_metadata", "success", meta_rows)
 
+                # Phase 8: Earnings history
+                earnings_hist_df = fetch_earnings_history(ticker_obj)
+                if earnings_hist_df is not None:
+                    earnings_hist_rows = upsert_earnings_history(collections["earnings_history"], symbol, earnings_hist_df)
+                    log_event(logger, phase="ingest.earnings_history", ticker=symbol, rows=earnings_hist_rows, duration_ms=_duration_ms(start))
+                    update_ingestion_metadata(collections["metadata"], symbol, "earnings_history", "success", earnings_hist_rows)
+
+                # Phase 8: Earnings calendar
+                earnings_cal_df = fetch_earnings_dates(ticker_obj)
+                if earnings_cal_df is not None:
+                    earnings_cal_rows = upsert_earnings_calendar(collections["earnings_calendar"], symbol, earnings_cal_df)
+                    log_event(logger, phase="ingest.earnings_calendar", ticker=symbol, rows=earnings_cal_rows, duration_ms=_duration_ms(start))
+                    update_ingestion_metadata(collections["metadata"], symbol, "earnings_calendar", "success", earnings_cal_rows)
+
             except Exception as data_err:
                 log_event(logger, phase="ingest.additional_data", ticker=symbol, error=str(data_err))
 
@@ -716,6 +730,80 @@ def extract_company_metadata(info: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
+def fetch_earnings_history(ticker_obj: Any) -> Optional[pd.DataFrame]:
+    """Fetch earnings history (EPS estimates vs actuals) for the ticker.
+
+    Phase 8: Earnings Intelligence
+    """
+    try:
+        # Try to get earnings history
+        earnings = getattr(ticker_obj, "earnings_history", None)
+        if earnings is None or (hasattr(earnings, 'empty') and earnings.empty):
+            return None
+
+        if isinstance(earnings, pd.DataFrame):
+            df = earnings.reset_index()
+            # Normalize column names
+            df.columns = [col.lower().replace(' ', '_') for col in df.columns]
+
+            # Extract relevant fields
+            result_rows = []
+            for _, row in df.iterrows():
+                try:
+                    result_rows.append({
+                        'date': pd.to_datetime(row.get('date', row.name if hasattr(row, 'name') else None)).date() if pd.notna(row.get('date', row.name)) else None,
+                        'fiscal_period': row.get('period', row.get('fiscal_period', '')),
+                        'eps_estimate': float(row.get('epsestimate', row.get('eps_estimate'))) if pd.notna(row.get('epsestimate', row.get('eps_estimate'))) else None,
+                        'eps_actual': float(row.get('epsactual', row.get('eps_actual'))) if pd.notna(row.get('epsactual', row.get('eps_actual'))) else None,
+                        'revenue_estimate': float(row.get('revenueestimate', row.get('revenue_estimate'))) if pd.notna(row.get('revenueestimate', row.get('revenue_estimate'))) else None,
+                        'revenue_actual': float(row.get('revenueactual', row.get('revenue_actual'))) if pd.notna(row.get('revenueactual', row.get('revenue_actual'))) else None,
+                    })
+                except Exception:
+                    continue
+
+            if result_rows:
+                return pd.DataFrame(result_rows)
+        return None
+    except Exception:
+        return None
+
+
+def fetch_earnings_dates(ticker_obj: Any) -> Optional[pd.DataFrame]:
+    """Fetch upcoming earnings dates for the ticker.
+
+    Phase 8: Earnings Calendar
+    """
+    try:
+        # Try to get earnings dates
+        earnings_dates = getattr(ticker_obj, "earnings_dates", None)
+        if earnings_dates is None or (hasattr(earnings_dates, 'empty') and earnings_dates.empty):
+            return None
+
+        if isinstance(earnings_dates, pd.DataFrame):
+            df = earnings_dates.reset_index()
+            # Normalize column names
+            df.columns = [col.lower().replace(' ', '_') for col in df.columns]
+
+            # Extract relevant fields
+            result_rows = []
+            for _, row in df.iterrows():
+                try:
+                    earnings_date_col = row.get('earnings_date', row.get('date', row.name if hasattr(row, 'name') else None))
+                    result_rows.append({
+                        'earnings_date': pd.to_datetime(earnings_date_col).date() if pd.notna(earnings_date_col) else None,
+                        'period_ending': row.get('period_ending', row.get('fiscalperiod', '')),
+                        'estimate': float(row.get('eps_estimate', row.get('estimate'))) if pd.notna(row.get('eps_estimate', row.get('estimate'))) else None,
+                    })
+                except Exception:
+                    continue
+
+            if result_rows:
+                return pd.DataFrame(result_rows)
+        return None
+    except Exception:
+        return None
+
+
 def upsert_price_history(collection: Collection, ticker: str, price_df: pd.DataFrame) -> int:
     """Upsert price history to MongoDB."""
     if price_df is None or price_df.empty:
@@ -847,6 +935,105 @@ def upsert_company_metadata(collection: Collection, ticker: str, metadata: Dict[
     return 1
 
 
+def upsert_earnings_history(collection: Collection, ticker: str, earnings_df: pd.DataFrame) -> int:
+    """Upsert earnings history to MongoDB.
+
+    Phase 8: Earnings Intelligence
+    """
+    if earnings_df is None or earnings_df.empty:
+        return 0
+
+    operations: List[UpdateOne] = []
+    fetched_at = datetime.now(UTC).isoformat()
+
+    for _, row in earnings_df.iterrows():
+        date_val = row.get('date')
+        if date_val is None:
+            continue
+
+        if isinstance(date_val, pd.Timestamp):
+            date_val = date_val.date()
+        date_iso = datetime.combine(date_val, dt_time(hour=16, tzinfo=EST)).astimezone(UTC).isoformat()
+
+        # Calculate surprise metrics
+        eps_actual = row.get('eps_actual')
+        eps_estimate = row.get('eps_estimate')
+        eps_surprise = None
+        surprise_pct = None
+
+        if eps_actual is not None and eps_estimate is not None and eps_estimate != 0:
+            eps_surprise = eps_actual - eps_estimate
+            surprise_pct = (eps_surprise / abs(eps_estimate)) * 100
+
+        document = {
+            "ticker": ticker,
+            "date": date_iso,
+            "fiscal_period": row.get('fiscal_period', ''),
+            "eps_estimate": float(eps_estimate) if pd.notna(eps_estimate) else None,
+            "eps_actual": float(eps_actual) if pd.notna(eps_actual) else None,
+            "eps_surprise": float(eps_surprise) if eps_surprise is not None else None,
+            "surprise_pct": float(surprise_pct) if surprise_pct is not None else None,
+            "revenue_estimate": float(row.get('revenue_estimate')) if pd.notna(row.get('revenue_estimate')) else None,
+            "revenue_actual": float(row.get('revenue_actual')) if pd.notna(row.get('revenue_actual')) else None,
+            "fetched_at": fetched_at,
+        }
+
+        operations.append(
+            UpdateOne(
+                {"ticker": ticker, "date": date_iso},
+                {"$set": document},
+                upsert=True,
+            )
+        )
+
+    if operations:
+        collection.bulk_write(operations, ordered=False)
+        return len(operations)
+    return 0
+
+
+def upsert_earnings_calendar(collection: Collection, ticker: str, calendar_df: pd.DataFrame) -> int:
+    """Upsert earnings calendar to MongoDB.
+
+    Phase 8: Earnings Calendar
+    """
+    if calendar_df is None or calendar_df.empty:
+        return 0
+
+    operations: List[UpdateOne] = []
+    fetched_at = datetime.now(UTC).isoformat()
+
+    for _, row in calendar_df.iterrows():
+        earnings_date_val = row.get('earnings_date')
+        if earnings_date_val is None:
+            continue
+
+        if isinstance(earnings_date_val, pd.Timestamp):
+            earnings_date_val = earnings_date_val.date()
+        date_iso = datetime.combine(earnings_date_val, dt_time(hour=16, tzinfo=EST)).astimezone(UTC).isoformat()
+
+        document = {
+            "ticker": ticker,
+            "earnings_date": date_iso,
+            "period_ending": row.get('period_ending', ''),
+            "estimate": float(row.get('estimate')) if pd.notna(row.get('estimate')) else None,
+            "fetched_at": fetched_at,
+        }
+
+        operations.append(
+            UpdateOne(
+                {"ticker": ticker, "earnings_date": date_iso},
+                {"$set": document},
+                upsert=True,
+            )
+        )
+
+    if operations:
+        collection.bulk_write(operations, ordered=False)
+        return len(operations)
+    return 0
+
+
 def update_ingestion_metadata(
     collection: Collection,
     ticker: str,
@@ -900,6 +1087,8 @@ def main() -> None:
         splits_collection = database["splits_history"]
         metadata_collection = database["company_metadata"]
         ingestion_metadata_collection = database["ingestion_metadata"]
+        earnings_history_collection = database["earnings_history"]  # Phase 8
+        earnings_calendar_collection = database["earnings_calendar"]  # Phase 8
 
         # Ensure indexes
         ensure_indexes(annual_collection)
@@ -909,6 +1098,9 @@ def main() -> None:
         ensure_indexes(splits_collection)
         metadata_collection.create_index("ticker", unique=True)
         ingestion_metadata_collection.create_index([("ticker", 1), ("data_type", 1)], unique=True)
+        # Phase 8: Earnings data indexes
+        ensure_indexes(earnings_history_collection)
+        ensure_indexes(earnings_calendar_collection)
 
         collections = {
             "annual": annual_collection,
@@ -918,6 +1110,8 @@ def main() -> None:
             "splits": splits_collection,
             "company_metadata": metadata_collection,
             "metadata": ingestion_metadata_collection,
+            "earnings_history": earnings_history_collection,  # Phase 8
+            "earnings_calendar": earnings_calendar_collection,  # Phase 8
         }
         for ticker in tickers:
             ingest_symbol(
