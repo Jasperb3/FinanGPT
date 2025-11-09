@@ -10,9 +10,10 @@ import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import duckdb
+import pandas as pd
 import requests
 from dotenv import load_dotenv
 from pymongo import MongoClient
@@ -28,8 +29,17 @@ from query import (
     extract_tickers_from_sql,
     introspect_schema,
     load_mongo_database,
-    pretty_print,
     validate_sql,
+)
+
+# Import visualization functions
+from visualize import (
+    create_chart,
+    detect_visualization_intent,
+    export_to_csv,
+    export_to_json,
+    export_to_excel,
+    pretty_print_formatted,
 )
 
 LOGS_DIR = Path("logs")
@@ -101,9 +111,10 @@ def call_ollama_chat(
 def print_welcome_message(schema: Mapping[str, Sequence[str]]) -> None:
     """Display welcome message with available data and example queries."""
     print("\n" + "=" * 70)
-    print("🤖 FinanGPT Interactive Query Interface (Phase 3)")
+    print("🤖 FinanGPT Interactive Query Interface (Phase 4 - Visual Analytics)")
     print("=" * 70)
-    print("\nConversational mode: Ask follow-up questions and refine your queries!")
+    print("\n🎨 New: Automatic chart generation for time-series and comparison queries!")
+    print("   Conversational mode: Ask follow-up questions and refine your queries!")
     print(f"\n📊 Available tables: {len(schema)}")
     for table in schema.keys():
         print(f"   • {table}")
@@ -111,12 +122,18 @@ def print_welcome_message(schema: Mapping[str, Sequence[str]]) -> None:
     print("\n💡 Try asking:")
     for i, example in enumerate(EXAMPLE_QUERIES[:5], 1):
         print(f"   {i}. {example}")
+    print(f"   6. Plot AAPL stock price over time")
+    print(f"   7. Compare revenue for AAPL, MSFT, GOOGL")
 
     print("\n📝 Commands:")
     print("   /help    - Show this help message")
     print("   /clear   - Clear conversation history")
     print("   /exit    - Exit the chat")
     print("   /quit    - Exit the chat")
+
+    print("\n📈 Visualization:")
+    print("   Charts are automatically created for time-series and comparison queries")
+    print("   Use keywords like 'plot', 'chart', 'compare', 'trend' for best results")
 
     print("\n" + "=" * 70 + "\n")
 
@@ -159,10 +176,11 @@ def execute_query_with_retry(
     logger: logging.Logger,
     mongo_db: Optional[Database],
     skip_freshness: bool,
-) -> Optional[tuple]:
+    user_query: str = "",
+) -> Optional[Tuple[List[str], List[Tuple], str, pd.DataFrame]]:
     """Execute query with intelligent error recovery and retry logic.
 
-    Returns: (columns, rows, sql) tuple or None if all retries failed.
+    Returns: (columns, rows, sql, df) tuple or None if all retries failed.
     """
     for attempt in range(MAX_RETRIES):
         try:
@@ -187,6 +205,9 @@ def execute_query_with_retry(
             columns = [desc[0] for desc in result.description]
             rows = result.fetchall()
 
+            # Create DataFrame for visualization
+            df = pd.DataFrame(rows, columns=columns)
+
             # Log success
             log_event(
                 logger,
@@ -196,7 +217,7 @@ def execute_query_with_retry(
                 rows=len(rows),
             )
 
-            return (columns, rows, sanitised_sql)
+            return (columns, rows, sanitised_sql, df)
 
         except (ValueError, duckdb.Error) as exc:
             error_msg = str(exc)
@@ -300,15 +321,25 @@ def run_chat_loop(
                 logger,
                 mongo_db,
                 skip_freshness,
+                user_input,
             )
 
             if result:
-                columns, rows, sql = result
+                columns, rows, sql, df = result
 
                 # Show results
                 print(f"\n📊 Generated SQL: {sql}")
                 print(f"\n✅ Results ({len(rows)} rows):\n")
-                pretty_print(columns, rows)
+
+                # Use enhanced formatting
+                pretty_print_formatted(columns, rows, use_formatting=True)
+
+                # Detect visualization intent and create chart
+                chart_type = detect_visualization_intent(user_input, df)
+                if chart_type and not df.empty:
+                    chart_path = create_chart(df, chart_type, f"Query Result - {chart_type.title()} Chart", user_input)
+                    if chart_path:
+                        print(f"\n📈 Chart saved: {chart_path}")
 
                 # Add successful query to history
                 conversation_history.append({

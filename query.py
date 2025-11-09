@@ -14,10 +14,22 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set
 
 import duckdb
+import pandas as pd
 import requests
 from dotenv import load_dotenv
 from pymongo import MongoClient
 from pymongo.database import Database
+
+# Import visualization functions (optional - only used if available)
+try:
+    from visualize import (
+        create_chart,
+        detect_visualization_intent,
+        pretty_print_formatted,
+    )
+    VISUALIZATION_AVAILABLE = True
+except ImportError:
+    VISUALIZATION_AVAILABLE = False
 
 LOGS_DIR = Path("logs")
 DEFAULT_LIMIT = 25
@@ -416,6 +428,16 @@ def main() -> None:
         action="store_true",
         help="Skip the data freshness check before querying.",
     )
+    parser.add_argument(
+        "--no-chart",
+        action="store_true",
+        help="Disable automatic chart generation.",
+    )
+    parser.add_argument(
+        "--no-formatting",
+        action="store_true",
+        help="Disable enhanced financial formatting.",
+    )
     args = parser.parse_args()
     load_dotenv()
     model = os.getenv("MODEL_NAME", "phi4:latest")
@@ -464,7 +486,21 @@ def main() -> None:
         result = conn.execute(sanitised_sql)
         columns = [desc[0] for desc in result.description]
         rows = result.fetchall()
-        pretty_print(columns, rows)
+
+        # Use enhanced formatting if available
+        if VISUALIZATION_AVAILABLE and not args.no_formatting:
+            pretty_print_formatted(columns, rows, use_formatting=True)
+        else:
+            pretty_print(columns, rows)
+
+        # Create visualization if enabled and available
+        if VISUALIZATION_AVAILABLE and not args.no_chart and rows:
+            df = pd.DataFrame(rows, columns=columns)
+            chart_type = detect_visualization_intent(question, df)
+            if chart_type:
+                chart_path = create_chart(df, chart_type, "Query Result", question)
+                if chart_path:
+                    print(f"\n📈 Chart saved: {chart_path}")
     except (requests.RequestException, ValueError, duckdb.Error) as exc:
         log_event(logger, phase="query.error", error=str(exc))
         raise SystemExit(f"Query failed: {exc}") from exc

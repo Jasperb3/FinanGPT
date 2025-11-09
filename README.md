@@ -23,6 +23,12 @@ An intelligent financial data pipeline that combines comprehensive data ingestio
 - **One-Shot Queries**: Quick answers with `query.py`
 - **Natural Language**: No SQL knowledge required - ask in plain English
 
+### 📊 Visual Analytics & Charting
+- **Automatic Chart Generation**: Intelligent detection and creation of charts
+- **4 Chart Types**: Line (time-series), Bar (comparisons), Scatter (correlations), Candlestick (OHLC)
+- **Financial Formatting**: Smart formatting ($1.50B, 25.00%, $150.25)
+- **Multiple Exports**: CSV, JSON, Excel with preserved data types
+
 ### 🔒 Enterprise-Grade Safety
 - **Data Validation**: US-only, non-ETF, USD-denominated instruments
 - **SQL Guardrails**: Table allow-lists, column validation, read-only queries
@@ -156,6 +162,46 @@ You: Sort by highest market cap
 AI:  [Re-sorts maintaining all previous filters]
 ```
 
+### Visual Analytics (Phase 4)
+
+**Automatic Chart Generation**:
+```bash
+# Line chart for time-series data
+python query.py "plot AAPL stock price over the last 6 months"
+
+# Bar chart for comparisons
+python query.py "compare revenue for AAPL, MSFT, GOOGL"
+
+# Scatter plot for correlations
+python query.py "show relationship between ROE and debt ratio"
+
+# Candlestick chart for OHLC data
+python query.py "show TSLA candlestick chart for October 2024"
+```
+
+**Financial Formatting** (automatic):
+```
+# Revenue/Income → $1.50B, $250.00M, $3.45K
+# Margins/Ratios → 25.00%, 15.50%, -3.25%
+# Prices → $150.25, $3,247.89
+# Volume → 1,500,000 (comma-separated)
+```
+
+**Control Options**:
+```bash
+# Disable chart generation
+python query.py --no-chart "show data"
+
+# Disable financial formatting (raw numbers)
+python query.py --no-formatting "show data"
+```
+
+**Chart Output**:
+- All charts saved to `charts/` directory
+- Timestamped filenames: `Query_Result_20251109_143022.png`
+- High-resolution PNG (300 DPI)
+- Professional styling with grid lines and legends
+
 ## 🗃️ Data Schema
 
 ### DuckDB Tables
@@ -204,6 +250,7 @@ python -m pytest tests/ --cov=. --cov-report=html
 - ✅ SQL guardrails (injection prevention, table allow-lists)
 - ✅ Freshness tracking (staleness detection, skip logic)
 - ✅ Conversational interface (history management, error recovery)
+- ✅ Visualization (chart detection, formatting, export functions)
 
 ## 📚 Example Queries
 
@@ -236,6 +283,15 @@ python -m pytest tests/ --cov=. --cov-report=html
 "Show companies with ROE > 20% and positive revenue growth"
 "Compare dividend yields for all stocks in my portfolio"
 "Find stocks with price drops >10% in the last month"
+```
+
+### Visual Analysis (Phase 4)
+```
+"Plot AAPL revenue trend over the last 5 years"
+"Compare profit margins for AAPL, MSFT, GOOGL as a bar chart"
+"Show candlestick chart for TSLA in October 2024"
+"Scatter plot of ROE vs revenue growth for all companies"
+"Plot closing prices for FAANG stocks over the last quarter"
 ```
 
 ## 🔧 Troubleshooting
@@ -346,9 +402,9 @@ db.ingestion_metadata.find({"last_fetched": {$lt: threshold.toISOString()}})
 - **Phase 1**: Rich data sources (prices, dividends, splits, metadata, ratios)
 - **Phase 2**: Smart caching & incremental updates
 - **Phase 3**: Conversational query interface with error recovery
+- **Phase 4**: Visual analytics & charting with financial formatting
 
 ### Future Enhancements 🚧
-- **Phase 4**: Visual analytics & charting (matplotlib integration)
 - **Phase 5**: Advanced features (peer group analysis, portfolio tracking)
 - **Phase 6**: Web dashboard (FastAPI + React frontend)
 
@@ -402,6 +458,6 @@ Contributions welcome! Please:
 
 ---
 
-**Built with**: Python 3.10+ • MongoDB • DuckDB • Ollama • yfinance
+**Built with**: Python 3.10+ • MongoDB • DuckDB • Ollama • yfinance • matplotlib
 
 **Powered by**: LLM-driven natural language query translation with enterprise-grade safety guardrails
