@@ -109,7 +109,7 @@ class TestFinancialFormatting:
     def test_format_large_number_millions(self):
         """Test formatting millions."""
         assert format_large_number(1500000) == "$1.50M"
-        assert format_large_number(500000) == "$0.50M"
+        assert format_large_number(500000) == "$500.00K"  # 500K, not 0.50M
 
     def test_format_large_number_thousands(self):
         """Test formatting thousands."""
