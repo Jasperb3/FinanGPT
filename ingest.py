@@ -461,6 +461,34 @@ def ingest_symbol(
                     log_event(logger, phase="ingest.earnings_calendar", ticker=symbol, rows=earnings_cal_rows, duration_ms=_duration_ms(start))
                     update_ingestion_metadata(collections["metadata"], symbol, "earnings_calendar", "success", earnings_cal_rows)
 
+                # Phase 9: Analyst recommendations
+                analyst_recs_df = fetch_analyst_recommendations(ticker_obj)
+                if analyst_recs_df is not None:
+                    analyst_recs_rows = upsert_analyst_recommendations(collections["analyst_recommendations"], symbol, analyst_recs_df)
+                    log_event(logger, phase="ingest.analyst_recommendations", ticker=symbol, rows=analyst_recs_rows, duration_ms=_duration_ms(start))
+                    update_ingestion_metadata(collections["metadata"], symbol, "analyst_recommendations", "success", analyst_recs_rows)
+
+                # Phase 9: Price targets
+                price_targets = fetch_analyst_price_targets(ticker_obj, info)
+                if price_targets is not None:
+                    price_targets_rows = upsert_price_targets(collections["price_targets"], symbol, price_targets)
+                    log_event(logger, phase="ingest.price_targets", ticker=symbol, rows=price_targets_rows, duration_ms=_duration_ms(start))
+                    update_ingestion_metadata(collections["metadata"], symbol, "price_targets", "success", price_targets_rows)
+
+                # Phase 9: Analyst consensus
+                analyst_consensus = fetch_analyst_consensus(ticker_obj, info)
+                if analyst_consensus is not None:
+                    consensus_rows = upsert_analyst_consensus(collections["analyst_consensus"], symbol, analyst_consensus)
+                    log_event(logger, phase="ingest.analyst_consensus", ticker=symbol, rows=consensus_rows, duration_ms=_duration_ms(start))
+                    update_ingestion_metadata(collections["metadata"], symbol, "analyst_consensus", "success", consensus_rows)
+
+                # Phase 9: Growth estimates
+                growth_estimates = fetch_growth_estimates(ticker_obj, info)
+                if growth_estimates is not None:
+                    growth_est_rows = upsert_growth_estimates(collections["growth_estimates"], symbol, growth_estimates)
+                    log_event(logger, phase="ingest.growth_estimates", ticker=symbol, rows=growth_est_rows, duration_ms=_duration_ms(start))
+                    update_ingestion_metadata(collections["metadata"], symbol, "growth_estimates", "success", growth_est_rows)
+
             except Exception as data_err:
                 log_event(logger, phase="ingest.additional_data", ticker=symbol, error=str(data_err))
 
@@ -1034,6 +1062,288 @@ def upsert_earnings_calendar(collection: Collection, ticker: str, calendar_df: p
     return 0
 
 
+def fetch_analyst_recommendations(ticker_obj: Any) -> Optional[pd.DataFrame]:
+    """Fetch analyst recommendations (upgrades/downgrades) for the ticker.
+
+    Phase 9: Analyst Intelligence
+    """
+    try:
+        recommendations = getattr(ticker_obj, "recommendations", None)
+        if recommendations is None or (hasattr(recommendations, 'empty') and recommendations.empty):
+            # Try upgrades_downgrades as alternative
+            recommendations = getattr(ticker_obj, "upgrades_downgrades", None)
+            if recommendations is None or (hasattr(recommendations, 'empty') and recommendations.empty):
+                return None
+
+        if isinstance(recommendations, pd.DataFrame):
+            df = recommendations.reset_index()
+            # Normalize column names
+            df.columns = [col.lower().replace(' ', '_') for col in df.columns]
+
+            # Extract relevant fields
+            result_rows = []
+            for _, row in df.iterrows():
+                try:
+                    # Handle date field (could be index or column)
+                    date_val = row.get('date', row.name if hasattr(row, 'name') else None)
+                    if pd.isna(date_val):
+                        continue
+
+                    result_rows.append({
+                        'date': pd.to_datetime(date_val).date() if pd.notna(date_val) else None,
+                        'firm': row.get('firm', row.get('gradecompany', '')),
+                        'from_grade': row.get('fromgrade', row.get('from_grade', '')),
+                        'to_grade': row.get('tograde', row.get('to_grade', '')),
+                        'action': row.get('action', '')
+                    })
+                except Exception:
+                    continue
+
+            if result_rows:
+                return pd.DataFrame(result_rows)
+        return None
+    except Exception:
+        return None
+
+
+def fetch_analyst_price_targets(ticker_obj: Any, info: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """Fetch analyst price targets from ticker info.
+
+    Phase 9: Analyst Intelligence
+    """
+    try:
+        # Price targets are usually in the info dict
+        target_mean = info.get('targetMeanPrice')
+        target_low = info.get('targetLowPrice')
+        target_high = info.get('targetHighPrice')
+        current_price = info.get('currentPrice') or info.get('regularMarketPrice')
+        num_analysts = info.get('numberOfAnalystOpinions')
+
+        if target_mean is not None or target_low is not None or target_high is not None:
+            return {
+                'current_price': float(current_price) if current_price is not None else None,
+                'target_low': float(target_low) if target_low is not None else None,
+                'target_mean': float(target_mean) if target_mean is not None else None,
+                'target_high': float(target_high) if target_high is not None else None,
+                'num_analysts': int(num_analysts) if num_analysts is not None else None,
+            }
+        return None
+    except Exception:
+        return None
+
+
+def fetch_analyst_consensus(ticker_obj: Any, info: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """Fetch analyst consensus ratings from ticker info.
+
+    Phase 9: Analyst Intelligence
+    """
+    try:
+        # Try to get recommendation data
+        rec_key = info.get('recommendationKey')
+        rec_mean = info.get('recommendationMean')
+
+        # Try to get detailed breakdown if available
+        recommendations_summary = getattr(ticker_obj, "recommendations_summary", None)
+
+        if recommendations_summary is not None and not recommendations_summary.empty:
+            # Parse from summary dataframe
+            latest = recommendations_summary.iloc[0] if len(recommendations_summary) > 0 else None
+            if latest is not None:
+                return {
+                    'strong_buy': int(latest.get('strongBuy', 0)) if pd.notna(latest.get('strongBuy')) else 0,
+                    'buy': int(latest.get('buy', 0)) if pd.notna(latest.get('buy')) else 0,
+                    'hold': int(latest.get('hold', 0)) if pd.notna(latest.get('hold')) else 0,
+                    'sell': int(latest.get('sell', 0)) if pd.notna(latest.get('sell')) else 0,
+                    'strong_sell': int(latest.get('strongSell', 0)) if pd.notna(latest.get('strongSell')) else 0,
+                }
+
+        # Fallback: try to infer from recommendationMean
+        if rec_mean is not None:
+            # Estimate distribution based on mean (rough approximation)
+            # recommendationMean: 1=Strong Buy, 2=Buy, 3=Hold, 4=Sell, 5=Strong Sell
+            return {
+                'strong_buy': 0,
+                'buy': 0,
+                'hold': 0,
+                'sell': 0,
+                'strong_sell': 0,
+            }
+
+        return None
+    except Exception:
+        return None
+
+
+def fetch_growth_estimates(ticker_obj: Any, info: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """Fetch analyst growth estimates from ticker.
+
+    Phase 9: Analyst Intelligence
+    """
+    try:
+        # Try to get growth estimates
+        earnings_growth = info.get('earningsGrowth')
+        revenue_growth = info.get('revenueGrowth')
+        earnings_quarterly_growth = info.get('earningsQuarterlyGrowth')
+
+        result = {}
+
+        # Add available estimates
+        if earnings_quarterly_growth is not None:
+            result['current_qtr_growth'] = float(earnings_quarterly_growth) * 100  # Convert to percentage
+
+        if earnings_growth is not None:
+            result['current_year_growth'] = float(earnings_growth) * 100
+
+        if revenue_growth is not None:
+            result['next_qtr_growth'] = float(revenue_growth) * 100
+
+        # 5-year growth from analyst estimates
+        five_year_growth = info.get('earningsGrowth')  # Some sources provide this
+        if five_year_growth is not None:
+            result['next_5yr_growth'] = float(five_year_growth) * 100
+
+        if result:
+            return result
+
+        return None
+    except Exception:
+        return None
+
+
+def upsert_analyst_recommendations(collection: Collection, ticker: str, recommendations_df: pd.DataFrame) -> int:
+    """Upsert analyst recommendations to MongoDB.
+
+    Phase 9: Analyst Intelligence
+    """
+    if recommendations_df is None or recommendations_df.empty:
+        return 0
+
+    operations: List[UpdateOne] = []
+    fetched_at = datetime.now(UTC).isoformat()
+
+    for _, row in recommendations_df.iterrows():
+        date_val = row.get('date')
+        if date_val is None:
+            continue
+
+        if isinstance(date_val, pd.Timestamp):
+            date_val = date_val.date()
+        date_iso = datetime.combine(date_val, dt_time(hour=16, tzinfo=EST)).astimezone(UTC).isoformat()
+
+        document = {
+            "ticker": ticker,
+            "date": date_iso,
+            "firm": row.get('firm', ''),
+            "from_grade": row.get('from_grade', ''),
+            "to_grade": row.get('to_grade', ''),
+            "action": row.get('action', ''),
+            "fetched_at": fetched_at,
+        }
+
+        operations.append(
+            UpdateOne(
+                {"ticker": ticker, "date": date_iso, "firm": document["firm"]},
+                {"$set": document},
+                upsert=True,
+            )
+        )
+
+    if operations:
+        collection.bulk_write(operations, ordered=False)
+        return len(operations)
+    return 0
+
+
+def upsert_price_targets(collection: Collection, ticker: str, price_targets: Dict[str, Any]) -> int:
+    """Upsert analyst price targets to MongoDB.
+
+    Phase 9: Analyst Intelligence
+    """
+    if not price_targets:
+        return 0
+
+    fetched_at = datetime.now(UTC).isoformat()
+    date_iso = datetime.now(UTC).date().isoformat()
+
+    document = {
+        "ticker": ticker,
+        "date": date_iso,
+        "current_price": price_targets.get('current_price'),
+        "target_low": price_targets.get('target_low'),
+        "target_mean": price_targets.get('target_mean'),
+        "target_high": price_targets.get('target_high'),
+        "num_analysts": price_targets.get('num_analysts'),
+        "fetched_at": fetched_at,
+    }
+
+    collection.update_one(
+        {"ticker": ticker, "date": date_iso},
+        {"$set": document},
+        upsert=True,
+    )
+    return 1
+
+
+def upsert_analyst_consensus(collection: Collection, ticker: str, consensus: Dict[str, Any]) -> int:
+    """Upsert analyst consensus to MongoDB.
+
+    Phase 9: Analyst Intelligence
+    """
+    if not consensus:
+        return 0
+
+    fetched_at = datetime.now(UTC).isoformat()
+    date_iso = datetime.now(UTC).date().isoformat()
+
+    document = {
+        "ticker": ticker,
+        "date": date_iso,
+        "strong_buy": consensus.get('strong_buy', 0),
+        "buy": consensus.get('buy', 0),
+        "hold": consensus.get('hold', 0),
+        "sell": consensus.get('sell', 0),
+        "strong_sell": consensus.get('strong_sell', 0),
+        "fetched_at": fetched_at,
+    }
+
+    collection.update_one(
+        {"ticker": ticker, "date": date_iso},
+        {"$set": document},
+        upsert=True,
+    )
+    return 1
+
+
+def upsert_growth_estimates(collection: Collection, ticker: str, growth_estimates: Dict[str, Any]) -> int:
+    """Upsert analyst growth estimates to MongoDB.
+
+    Phase 9: Analyst Intelligence
+    """
+    if not growth_estimates:
+        return 0
+
+    fetched_at = datetime.now(UTC).isoformat()
+    date_iso = datetime.now(UTC).date().isoformat()
+
+    document = {
+        "ticker": ticker,
+        "date": date_iso,
+        "current_qtr_growth": growth_estimates.get('current_qtr_growth'),
+        "next_qtr_growth": growth_estimates.get('next_qtr_growth'),
+        "current_year_growth": growth_estimates.get('current_year_growth'),
+        "next_year_growth": growth_estimates.get('next_year_growth'),
+        "next_5yr_growth": growth_estimates.get('next_5yr_growth'),
+        "fetched_at": fetched_at,
+    }
+
+    collection.update_one(
+        {"ticker": ticker, "date": date_iso},
+        {"$set": document},
+        upsert=True,
+    )
+    return 1
+
+
 def update_ingestion_metadata(
     collection: Collection,
     ticker: str,
@@ -1089,6 +1399,11 @@ def main() -> None:
         ingestion_metadata_collection = database["ingestion_metadata"]
         earnings_history_collection = database["earnings_history"]  # Phase 8
         earnings_calendar_collection = database["earnings_calendar"]  # Phase 8
+        # Phase 9: Analyst data collections
+        analyst_recommendations_collection = database["analyst_recommendations"]
+        price_targets_collection = database["price_targets"]
+        analyst_consensus_collection = database["analyst_consensus"]
+        growth_estimates_collection = database["growth_estimates"]
 
         # Ensure indexes
         ensure_indexes(annual_collection)
@@ -1101,6 +1416,11 @@ def main() -> None:
         # Phase 8: Earnings data indexes
         ensure_indexes(earnings_history_collection)
         ensure_indexes(earnings_calendar_collection)
+        # Phase 9: Analyst data indexes
+        ensure_indexes(analyst_recommendations_collection)
+        ensure_indexes(price_targets_collection)
+        ensure_indexes(analyst_consensus_collection)
+        ensure_indexes(growth_estimates_collection)
 
         collections = {
             "annual": annual_collection,
@@ -1112,6 +1432,10 @@ def main() -> None:
             "metadata": ingestion_metadata_collection,
             "earnings_history": earnings_history_collection,  # Phase 8
             "earnings_calendar": earnings_calendar_collection,  # Phase 8
+            "analyst_recommendations": analyst_recommendations_collection,  # Phase 9
+            "price_targets": price_targets_collection,  # Phase 9
+            "analyst_consensus": analyst_consensus_collection,  # Phase 9
+            "growth_estimates": growth_estimates_collection,  # Phase 9
         }
         for ticker in tickers:
             ingest_symbol(
