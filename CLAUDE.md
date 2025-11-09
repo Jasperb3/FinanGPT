@@ -54,6 +54,13 @@ FinanGPT is a Python-based financial data pipeline with an intelligent conversat
 - Query suggestions and examples at startup
 - Special commands: `/help`, `/clear`, `/exit`
 
+**Phase 4: Visual Analytics & Charting** ✅
+- Automatic chart generation from query results
+- Intelligent chart type detection (line, bar, scatter, candlestick)
+- Financial value formatting ($1.50B, 25.00%, etc.)
+- Multiple export formats (CSV, JSON, Excel)
+- Enhanced terminal output with financial formatting
+
 ## Environment Setup
 
 **Virtual Environment (Required)**:
@@ -66,6 +73,7 @@ source .venv/bin/activate  # Linux/Mac
 ```bash
 pip install -r requirements.txt
 # Includes: yfinance, pandas, duckdb, pymongo, requests, python-dotenv, pytest
+# Visualization: matplotlib, mplfinance, openpyxl
 ```
 
 **Environment Variables** (`.env`):
@@ -132,6 +140,29 @@ python chat.py --skip-freshness-check
 # /help    - Show help message
 # /clear   - Clear conversation history
 # /exit    - Exit chat mode
+```
+
+**Visual Analytics & Charting (Phase 4)**:
+```bash
+# Query with automatic chart generation
+python query.py "plot AAPL stock price over the last year"
+
+# Query with enhanced financial formatting
+python query.py "show AAPL revenue and profit margins"
+# Output: $394.00B, 23.76%, etc.
+
+# Disable chart generation
+python query.py --no-chart "show revenue trends"
+
+# Disable financial formatting
+python query.py --no-formatting "show raw data"
+
+# Chat mode also includes automatic visualization
+python chat.py
+# You: Compare AAPL and MSFT revenue
+# AI: [Shows table + generates bar chart automatically]
+
+# Charts saved to: charts/Query_Result_YYYYMMDD_HHMMSS.png
 ```
 
 **Testing**:
@@ -660,6 +691,344 @@ All chat sessions are logged to `logs/chat_YYYYMMDD.log`:
 - Increase timeout in code if needed (default: 60s)
 - Check Ollama server status: `ollama list`
 - Verify model is loaded: `ollama run phi4:latest`
+
+## Phase 4: Visual Analytics & Charting
+
+### Overview
+
+Phase 4 introduces automatic visualization capabilities and enhanced financial formatting across all query interfaces. The system intelligently detects when a query would benefit from visual representation and automatically generates appropriate charts.
+
+### Key Features
+
+**Intelligent Chart Detection**:
+- Automatic detection from query keywords ("plot", "chart", "compare", "trend")
+- Data structure analysis (time-series, OHLC, multi-ticker comparisons)
+- Support for 4 chart types: line, bar, scatter, candlestick
+- Works with both `query.py` and `chat.py` interfaces
+
+**Financial Value Formatting**:
+- Large numbers: $1.50B, $250.00M, $3.45K
+- Percentages: 25.00% (for margins, ratios, growth)
+- Prices: $150.25 (for stock prices)
+- Volume: 1,500,000 (comma-separated integers)
+- Smart detection based on column names
+
+**Export Capabilities**:
+- CSV export with proper encoding
+- JSON export with date serialization
+- Excel export with formatted sheets
+- All exports preserve data types
+
+**Enhanced Terminal Output**:
+- Pretty-printed tables with financial formatting
+- Column name beautification (camelCase → Title Case)
+- Alignment and spacing optimized for readability
+
+### Chart Types
+
+**Line Chart** (Time-Series Data):
+```python
+# Automatically selected for queries with:
+# - Date/time column + numeric values
+# - Keywords: "trend", "over time", "history"
+
+# Example query:
+"Plot AAPL revenue over the last 5 years"
+```
+
+**Bar Chart** (Comparisons):
+```python
+# Automatically selected for:
+# - Multiple tickers with single metric
+# - Keywords: "compare", "comparison"
+
+# Example query:
+"Compare revenue across AAPL, MSFT, GOOGL"
+```
+
+**Scatter Plot** (Correlations):
+```python
+# Automatically selected for:
+# - Two numeric columns without date
+# - Keywords: "correlation", "relationship"
+
+# Example query:
+"Show relationship between ROE and debt ratio"
+```
+
+**Candlestick Chart** (OHLC Data):
+```python
+# Automatically selected for:
+# - Data with open, high, low, close columns
+# - Keywords: "candlestick", "ohlc"
+
+# Example query:
+"Show candlestick chart for AAPL prices in Q4 2024"
+```
+
+### Financial Formatting Rules
+
+The system applies intelligent formatting based on column names:
+
+**Revenue/Income Columns** → Large Number Format:
+- `totalRevenue`, `netIncome`, `operatingIncome`, `grossProfit`, `ebitda`
+- `totalAssets`, `totalLiabilities`, `shareholderEquity`
+- `operatingCashFlow`, `freeCashFlow`, `marketCap`
+- Format: $1.50T, $394.00B, $25.00M, $750.00K
+
+**Ratio/Margin Columns** → Percentage Format:
+- `net_margin`, `gross_margin`, `ebitda_margin`, `fcf_margin`
+- `roe`, `roa`, `debt_ratio`, `asset_turnover`
+- `revenue_growth_yoy`, `income_growth_yoy`
+- Format: 25.00%, 15.50%, -3.25%
+
+**Price Columns** → Currency Format:
+- `close`, `open`, `high`, `low`, `adj_close`
+- Format: $150.25, $3,247.89
+
+**Volume Columns** → Integer Format:
+- `volume`, `shares`, `sharesOutstanding`
+- Format: 1,500,000 (comma-separated)
+
+**Default** → Decimal Format:
+- Unknown columns: 123.46 (2 decimal places)
+
+### Integration with Query Interfaces
+
+**One-Shot Queries (`query.py`)**:
+```python
+# Automatic visualization + formatting (default)
+python query.py "plot AAPL stock price trends"
+
+# Disable visualization
+python query.py --no-chart "show revenue data"
+
+# Disable formatting (raw numbers)
+python query.py --no-formatting "show raw revenue"
+
+# Disable both
+python query.py --no-chart --no-formatting "show data"
+```
+
+**Conversational Mode (`chat.py`)**:
+```python
+# Visualization and formatting always enabled in chat
+python chat.py
+
+# Example session:
+You: Show AAPL revenue for last 3 years
+AI: [Displays formatted table with $B values]
+
+You: Plot this as a chart
+AI: [Generates line chart automatically]
+    📈 Chart saved: charts/Query_Result_20251109_143022.png
+```
+
+### Chart Output
+
+All charts are saved to the `charts/` directory with timestamped filenames:
+
+```bash
+charts/
+├── Query_Result_20251109_143022.png
+├── Query_Result_Line_Chart_20251109_143155.png
+├── Query_Result_Bar_Chart_20251109_144312.png
+└── ...
+```
+
+**Chart Features**:
+- Professional styling with grid lines
+- Automatic axis labeling from column names
+- Legend with ticker symbols (multi-ticker charts)
+- Date formatting on x-axis (time-series)
+- High-resolution PNG output (300 DPI)
+- Automatic figure sizing based on data
+
+### Export Functions
+
+**CSV Export**:
+```python
+from visualize import export_to_csv
+export_to_csv(df, "output.csv")
+# Creates: CSV file with UTF-8 encoding
+```
+
+**JSON Export**:
+```python
+from visualize import export_to_json
+export_to_json(df, "output.json")
+# Creates: JSON with date serialization
+```
+
+**Excel Export**:
+```python
+from visualize import export_to_excel
+export_to_excel(df, "output.xlsx")
+# Creates: Excel file with auto-sized columns
+```
+
+### Auto-Detection Algorithm
+
+The chart type is determined by:
+
+1. **Keyword Detection** (highest priority):
+   - "plot", "chart", "graph" → Enable visualization
+   - "candlestick", "ohlc" → Candlestick chart
+   - "scatter", "correlation" → Scatter plot
+   - "compare", "comparison" → Bar chart
+   - "trend", "over time" → Line chart
+
+2. **Data Structure Analysis**:
+   - Has OHLC columns? → Candlestick
+   - Has date column? → Line chart
+   - Multiple tickers, no date? → Bar chart
+   - Two numeric columns? → Scatter plot
+
+3. **Fallback**:
+   - If no clear match → No chart generated
+   - User can explicitly request with keywords
+
+### Formatting in Action
+
+**Before (Phase 1-3)**:
+```
+ticker | totalRevenue  | net_margin
+-------|---------------|------------
+AAPL   | 394328000000  | 0.2376
+MSFT   | 245122000000  | 0.3596
+```
+
+**After (Phase 4)**:
+```
+Ticker | Total Revenue | Net Margin
+-------|---------------|------------
+AAPL   | $394.00B      | 23.76%
+MSFT   | $245.00B      | 35.96%
+```
+
+### Error Handling
+
+**Missing Matplotlib**:
+- Optional import pattern: visualization gracefully disabled if not installed
+- Query continues to work, but charts are not generated
+- User sees informational message
+
+**Invalid Chart Data**:
+- Empty DataFrames → No chart generated
+- Missing required columns → Falls back to table output
+- Invalid chart type → Logs warning, continues
+
+**File System Errors**:
+- `charts/` directory created automatically if missing
+- Filename sanitization removes invalid characters
+- Long filenames truncated to 200 characters
+
+### Performance Considerations
+
+**Chart Generation**:
+- Minimal overhead (~100-200ms per chart)
+- Charts generated asynchronously (non-blocking)
+- Memory efficient (figures closed after save)
+
+**Formatting**:
+- Negligible performance impact (<10ms)
+- Applied only to display, not to underlying data
+- No impact on SQL query execution
+
+### Testing
+
+Phase 4 includes comprehensive test coverage (`tests/test_visualizations.py`):
+
+```bash
+# Run visualization tests
+python -m pytest tests/test_visualizations.py -v
+
+# Test categories:
+# - Visualization intent detection (7 tests)
+# - Financial formatting (11 tests)
+# - Column name formatting (3 tests)
+# - Chart creation (3 tests)
+# - Export functions (2 tests)
+# - Integration workflows (2 tests)
+```
+
+### Usage Examples
+
+**Time-Series Analysis**:
+```bash
+python query.py "plot AAPL closing price over the last 6 months"
+# → Line chart with date on x-axis, price on y-axis
+# → Table with formatted prices: $150.25
+```
+
+**Multi-Company Comparison**:
+```bash
+python chat.py
+You: Compare net margins for AAPL, MSFT, GOOGL
+# → Bar chart comparing the three companies
+# → Table with percentages: 23.76%, 35.96%, 28.12%
+```
+
+**Financial Ratios**:
+```bash
+python query.py "show ROE and ROA for tech companies"
+# → Table with percentage formatting
+# → Scatter plot if both metrics requested
+```
+
+**OHLC Stock Data**:
+```bash
+python query.py "show TSLA daily prices for October 2024 as candlestick"
+# → Candlestick chart with OHLC data
+# → Table with price formatting
+```
+
+### Customization
+
+**Disable Visualization Globally**:
+```python
+# In query.py or chat.py, set:
+VISUALIZATION_AVAILABLE = False
+```
+
+**Custom Formatting Rules**:
+```python
+# In visualize.py, update FORMAT_RULES dict:
+FORMAT_RULES = {
+    'revenue': lambda v: format_large_number(v),
+    'custom_metric': lambda v: f"{v:.3f}x",  # Custom format
+}
+```
+
+**Chart Styling**:
+```python
+# In visualize.py chart functions, modify matplotlib settings:
+plt.style.use('seaborn-v0_8')  # Different style
+plt.rcParams['figure.dpi'] = 150  # Different resolution
+```
+
+### Troubleshooting
+
+**Charts not generating**:
+- Check if `charts/` directory has write permissions
+- Verify matplotlib is installed: `pip list | grep matplotlib`
+- Look for error messages in terminal output
+- Check query includes visualization keywords
+
+**Formatting looks wrong**:
+- Verify column names match formatting rules (see Financial Formatting Rules)
+- Check for NULL/None values in data (displayed as "N/A")
+- Disable formatting with `--no-formatting` to see raw values
+
+**Chart quality issues**:
+- Increase DPI in chart creation functions (default: 300)
+- Adjust figure size in code (default: 10x6 inches)
+- Use higher-quality output format (PNG with anti-aliasing)
+
+**Export failures**:
+- Ensure write permissions for output directory
+- Check disk space availability
+- Verify filename doesn't contain invalid characters
 
 ## Common Issues
 

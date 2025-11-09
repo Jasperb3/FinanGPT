@@ -5,3 +5,6 @@ pymongo
 requests
 python-dotenv
 pytest
+matplotlib
+mplfinance
+openpyxl
