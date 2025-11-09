@@ -1,0 +1,36 @@
+# FinanGPT Configuration File
+# Phase 7: Unified Workflow & Automation
+
+database:
+  mongo_uri: mongodb://localhost:27017/financial_data
+  duckdb_path: financial_data.duckdb
+
+ollama:
+  url: http://localhost:11434
+  model: phi4:latest
+  timeout: 60
+  max_retries: 3
+
+ingestion:
+  price_lookback_days: 365
+  auto_refresh_threshold_days: 7
+  batch_size: 50
+  retry_backoff: [1, 2, 4]
+
+query:
+  default_limit: 25
+  max_limit: 100
+  enable_visualizations: true
+  chart_output_dir: charts/
+  export_formats: [csv, json, excel]
+
+features:
+  conversational_mode: true
+  auto_error_recovery: true
+  query_suggestions: true
+  portfolio_tracking: false
+
+logging:
+  level: INFO
+  directory: logs/
+  format: json
