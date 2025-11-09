@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+logs/
+tmp/
+.env
+*.duckdb
+tickers.csv
+
+# Keep reference documentation and tests
+!reference/
+!tests/
