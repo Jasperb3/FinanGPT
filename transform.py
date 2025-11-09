@@ -350,6 +350,133 @@ def prepare_earnings_calendar_dataframe(documents: Sequence[Mapping[str, Any]]) 
     return pd.DataFrame(rows)
 
 
+def prepare_analyst_recommendations_dataframe(documents: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
+    """Transform analyst recommendations documents into DataFrame.
+
+    Phase 9: Analyst Intelligence
+    """
+    rows: List[Dict[str, Any]] = []
+    for doc in documents:
+        ticker = doc.get("ticker")
+        date_value = doc.get("date")
+        if not ticker or not date_value:
+            continue
+        try:
+            parsed_date = parse_iso_date(date_value)
+        except ValueError:
+            continue
+
+        row = {
+            "ticker": ticker,
+            "date": parsed_date,
+            "firm": doc.get("firm"),
+            "from_grade": doc.get("from_grade"),
+            "to_grade": doc.get("to_grade"),
+            "action": doc.get("action"),
+        }
+        rows.append(row)
+
+    if not rows:
+        return pd.DataFrame(columns=["ticker", "date", "firm", "from_grade", "to_grade", "action"])
+    return pd.DataFrame(rows)
+
+
+def prepare_price_targets_dataframe(documents: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
+    """Transform price targets documents into DataFrame.
+
+    Phase 9: Analyst Intelligence
+    """
+    rows: List[Dict[str, Any]] = []
+    for doc in documents:
+        ticker = doc.get("ticker")
+        date_value = doc.get("date")
+        if not ticker or not date_value:
+            continue
+        try:
+            parsed_date = parse_iso_date(date_value)
+        except ValueError:
+            continue
+
+        row = {
+            "ticker": ticker,
+            "date": parsed_date,
+            "current_price": doc.get("current_price"),
+            "target_low": doc.get("target_low"),
+            "target_mean": doc.get("target_mean"),
+            "target_high": doc.get("target_high"),
+            "num_analysts": doc.get("num_analysts"),
+        }
+        rows.append(row)
+
+    if not rows:
+        return pd.DataFrame(columns=["ticker", "date", "current_price", "target_low", "target_mean", "target_high", "num_analysts"])
+    return pd.DataFrame(rows)
+
+
+def prepare_analyst_consensus_dataframe(documents: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
+    """Transform analyst consensus documents into DataFrame.
+
+    Phase 9: Analyst Intelligence
+    """
+    rows: List[Dict[str, Any]] = []
+    for doc in documents:
+        ticker = doc.get("ticker")
+        date_value = doc.get("date")
+        if not ticker or not date_value:
+            continue
+        try:
+            parsed_date = parse_iso_date(date_value)
+        except ValueError:
+            continue
+
+        row = {
+            "ticker": ticker,
+            "date": parsed_date,
+            "strong_buy": doc.get("strong_buy", 0),
+            "buy": doc.get("buy", 0),
+            "hold": doc.get("hold", 0),
+            "sell": doc.get("sell", 0),
+            "strong_sell": doc.get("strong_sell", 0),
+        }
+        rows.append(row)
+
+    if not rows:
+        return pd.DataFrame(columns=["ticker", "date", "strong_buy", "buy", "hold", "sell", "strong_sell"])
+    return pd.DataFrame(rows)
+
+
+def prepare_growth_estimates_dataframe(documents: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
+    """Transform growth estimates documents into DataFrame.
+
+    Phase 9: Analyst Intelligence
+    """
+    rows: List[Dict[str, Any]] = []
+    for doc in documents:
+        ticker = doc.get("ticker")
+        date_value = doc.get("date")
+        if not ticker or not date_value:
+            continue
+        try:
+            parsed_date = parse_iso_date(date_value)
+        except ValueError:
+            continue
+
+        row = {
+            "ticker": ticker,
+            "date": parsed_date,
+            "current_qtr_growth": doc.get("current_qtr_growth"),
+            "next_qtr_growth": doc.get("next_qtr_growth"),
+            "current_year_growth": doc.get("current_year_growth"),
+            "next_year_growth": doc.get("next_year_growth"),
+            "next_5yr_growth": doc.get("next_5yr_growth"),
+        }
+        rows.append(row)
+
+    if not rows:
+        return pd.DataFrame(columns=["ticker", "date", "current_qtr_growth", "next_qtr_growth", "current_year_growth", "next_year_growth", "next_5yr_growth"])
+    return pd.DataFrame(rows)
+
+
 def create_ratios_table(conn: duckdb.DuckDBPyConnection) -> int:
     """Create derived financial ratios table from annual financials."""
     try:
@@ -500,6 +627,11 @@ def main() -> None:
         # Phase 8: Earnings data
         earnings_history_docs = fetch_documents(database["earnings_history"])
         earnings_calendar_docs = fetch_documents(database["earnings_calendar"])
+        # Phase 9: Analyst data
+        analyst_recommendations_docs = fetch_documents(database["analyst_recommendations"])
+        price_targets_docs = fetch_documents(database["price_targets"])
+        analyst_consensus_docs = fetch_documents(database["analyst_consensus"])
+        growth_estimates_docs = fetch_documents(database["growth_estimates"])
 
     # Prepare DataFrames
     annual_frame = prepare_dataframe(annual_docs)
@@ -511,6 +643,12 @@ def main() -> None:
     # Phase 8: Earnings data
     earnings_history_frame = prepare_earnings_history_dataframe(earnings_history_docs)
     earnings_calendar_frame = prepare_earnings_calendar_dataframe(earnings_calendar_docs)
+    # Phase 9: Analyst data - prepare frames from MongoDB documents
+    # These will be processed into raw tables, then views will be created by analyst.py functions
+    analyst_recs_frame = prepare_analyst_recommendations_dataframe(analyst_recommendations_docs)
+    price_targets_frame = prepare_price_targets_dataframe(price_targets_docs)
+    analyst_consensus_frame = prepare_analyst_consensus_dataframe(analyst_consensus_docs)
+    growth_estimates_frame = prepare_growth_estimates_dataframe(growth_estimates_docs)
 
     # Transform to DuckDB
     conn = duckdb.connect(DUCKDB_PATH)
@@ -572,6 +710,52 @@ def main() -> None:
             earnings_cal_rows = 0
         log_event(logger, phase="transform.earnings_calendar", rows=earnings_cal_rows)
 
+        # Phase 9: Analyst recommendations
+        if not analyst_recs_frame.empty:
+            analyst_recs_rows = upsert_dataframe(conn, analyst_recs_frame, "analyst.recommendations_raw", "analyst")
+        else:
+            conn.execute("CREATE SCHEMA IF NOT EXISTS analyst")
+            conn.execute("CREATE TABLE IF NOT EXISTS analyst.recommendations_raw (ticker VARCHAR, date DATE, firm VARCHAR, from_grade VARCHAR, to_grade VARCHAR, action VARCHAR)")
+            analyst_recs_rows = 0
+        log_event(logger, phase="transform.analyst_recommendations", rows=analyst_recs_rows)
+
+        # Phase 9: Price targets
+        if not price_targets_frame.empty:
+            conn.execute("CREATE SCHEMA IF NOT EXISTS analyst")
+            conn.register("price_targets_frame", price_targets_frame)
+            conn.execute("DROP TABLE IF EXISTS analyst.price_targets_raw")
+            conn.execute("CREATE TABLE analyst.price_targets_raw AS SELECT * FROM price_targets_frame")
+            conn.unregister("price_targets_frame")
+            price_targets_rows = len(price_targets_frame)
+        else:
+            conn.execute("CREATE TABLE IF NOT EXISTS analyst.price_targets_raw (ticker VARCHAR, date DATE, current_price DOUBLE, target_low DOUBLE, target_mean DOUBLE, target_high DOUBLE, num_analysts INTEGER)")
+            price_targets_rows = 0
+        log_event(logger, phase="transform.price_targets", rows=price_targets_rows)
+
+        # Phase 9: Analyst consensus
+        if not analyst_consensus_frame.empty:
+            conn.register("analyst_consensus_frame", analyst_consensus_frame)
+            conn.execute("DROP TABLE IF EXISTS analyst.consensus_raw")
+            conn.execute("CREATE TABLE analyst.consensus_raw AS SELECT * FROM analyst_consensus_frame")
+            conn.unregister("analyst_consensus_frame")
+            consensus_rows = len(analyst_consensus_frame)
+        else:
+            conn.execute("CREATE TABLE IF NOT EXISTS analyst.consensus_raw (ticker VARCHAR, date DATE, strong_buy INTEGER, buy INTEGER, hold INTEGER, sell INTEGER, strong_sell INTEGER)")
+            consensus_rows = 0
+        log_event(logger, phase="transform.analyst_consensus", rows=consensus_rows)
+
+        # Phase 9: Growth estimates
+        if not growth_estimates_frame.empty:
+            conn.register("growth_estimates_frame", growth_estimates_frame)
+            conn.execute("DROP TABLE IF NOT EXISTS analyst.growth_estimates_raw")
+            conn.execute("CREATE TABLE analyst.growth_estimates_raw AS SELECT * FROM growth_estimates_frame")
+            conn.unregister("growth_estimates_frame")
+            growth_estimates_rows = len(growth_estimates_frame)
+        else:
+            conn.execute("CREATE TABLE IF NOT EXISTS analyst.growth_estimates_raw (ticker VARCHAR, date DATE, current_qtr_growth DOUBLE, next_qtr_growth DOUBLE, current_year_growth DOUBLE, next_year_growth DOUBLE, next_5yr_growth DOUBLE)")
+            growth_estimates_rows = 0
+        log_event(logger, phase="transform.growth_estimates", rows=growth_estimates_rows)
+
         # Create derived ratios table
         ratio_rows = create_ratios_table(conn)
         log_event(logger, phase="transform.ratios", rows=ratio_rows)
@@ -601,6 +785,26 @@ def main() -> None:
         # Create earnings calendar view (Phase 8)
         earnings_calendar_view_rows = create_earnings_calendar_view(conn)
         log_event(logger, phase="transform.earnings_calendar_view", rows=earnings_calendar_view_rows)
+
+        # Create analyst views (Phase 9)
+        from analyst import (
+            create_analyst_recommendations_table,
+            create_price_targets_table,
+            create_analyst_consensus_table,
+            create_growth_estimates_table
+        )
+
+        analyst_recs_view_rows = create_analyst_recommendations_table(conn)
+        log_event(logger, phase="transform.analyst_recommendations_view", rows=analyst_recs_view_rows)
+
+        price_targets_view_rows = create_price_targets_table(conn)
+        log_event(logger, phase="transform.price_targets_view", rows=price_targets_view_rows)
+
+        analyst_consensus_view_rows = create_analyst_consensus_table(conn)
+        log_event(logger, phase="transform.analyst_consensus_view", rows=analyst_consensus_view_rows)
+
+        growth_estimates_view_rows = create_growth_estimates_table(conn)
+        log_event(logger, phase="transform.growth_estimates_view", rows=growth_estimates_view_rows)
 
     finally:
         conn.close()

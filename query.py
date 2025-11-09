@@ -66,6 +66,11 @@ ALLOWED_TABLES = (
     "earnings.history",
     "earnings.calendar",
     "earnings.calendar_upcoming",
+    # Phase 9: Analyst Intelligence
+    "analyst.recommendations",
+    "analyst.price_targets",
+    "analyst.consensus",
+    "analyst.growth_estimates",
 )
 
 
@@ -251,6 +256,31 @@ Examples:
 - "Upcoming earnings this week" → SELECT * FROM earnings.calendar_upcoming WHERE earnings_date <= CURRENT_DATE + 7
 """
 
+    # Phase 9: Analyst Intelligence information
+    analyst_intelligence_info = """
+Analyst Intelligence (Phase 9):
+
+Analyst Recommendations (analyst.recommendations table):
+Fields: firm, from_grade, to_grade, action, action_score
+Actions: up (upgrade), down (downgrade), maintain, init (initiated), reit (reiterated)
+
+Price Targets (analyst.price_targets table):
+Fields: current_price, target_low, target_mean, target_high, upside_pct, downside_pct, max_upside_pct, num_analysts
+
+Analyst Consensus (analyst.consensus table):
+Fields: strong_buy, buy, hold, sell, strong_sell, total_analysts, consensus_rating, consensus_label
+Consensus Labels: Strong Buy, Buy, Hold, Sell, Strong Sell
+
+Growth Estimates (analyst.growth_estimates table):
+Fields: current_qtr_growth, next_qtr_growth, current_year_growth, next_year_growth, next_5yr_growth, peg_forward
+
+Examples:
+- "Show me stocks with recent analyst upgrades" → SELECT * FROM analyst.recommendations WHERE action = 'up' ORDER BY date DESC
+- "Find stocks with highest upside to price targets" → SELECT * FROM analyst.price_targets ORDER BY upside_pct DESC
+- "Stocks rated Strong Buy with upside > 15%" → SELECT * FROM analyst.consensus c JOIN analyst.price_targets p ON c.ticker = p.ticker WHERE consensus_label = 'Strong Buy' AND upside_pct > 15
+- "Companies with 5-year growth estimates > 20%" → SELECT * FROM analyst.growth_estimates WHERE next_5yr_growth > 20
+"""
+
     # Window functions and statistical aggregations
     advanced_sql = """
 Advanced SQL Features Allowed:
@@ -277,6 +307,7 @@ Advanced SQL Features Allowed:
         f"{date_context}\n"
         f"{peer_groups_info}\n"
         f"{valuation_earnings_info}\n"
+        f"{analyst_intelligence_info}\n"
         f"{advanced_sql}\n"
         f"Rules:\n{rules_block}\n"
         "Output only SQL, optionally wrapped in ```sql``` fences."

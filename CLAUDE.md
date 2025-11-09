@@ -1,15 +1,15 @@
 # CLAUDE.md
 
 **Project**: FinanGPT - AI-Powered Financial Data Analysis Platform
-**Status**: Production-ready (Phase 8 implemented)
-**Version**: 2.1 (Updated 2025-11-09)
+**Status**: Production-ready (Phase 9 implemented)
+**Version**: 2.2 (Updated 2025-11-09)
 
 ## Quick Reference
 
 **Tech Stack**: Python 3.x | MongoDB | DuckDB | Ollama (LLM) | yfinance
-**Lines of Code**: ~5,000 Python | 10 core modules | 10 test suites
+**Lines of Code**: ~5,700 Python | 11 core modules
 **Data**: US equities only (non-ETF, USD-denominated)
-**Phase 8**: Valuation metrics (P/E, P/B, dividend yield) + Earnings intelligence
+**Latest**: Phase 9 - Analyst intelligence (recommendations, price targets, consensus)
 
 ### Core Workflows
 
@@ -76,40 +76,44 @@ ollama pull gpt-oss:latest
 
 ### Database Schemas
 
-**MongoDB Collections** (9):
+**MongoDB Collections** (13):
 ```
 raw_annual, raw_quarterly         # Financial statements
 stock_prices_daily                # OHLCV data
 dividends_history, splits_history # Corporate actions
 company_metadata                  # Company info
 ingestion_metadata                # Freshness tracking
-earnings_history                  # Phase 8: EPS estimates vs actuals
-earnings_calendar                 # Phase 8: Upcoming earnings dates
+earnings_history, earnings_calendar  # Phase 8: Earnings data
+analyst_recommendations           # Phase 9: Analyst upgrades/downgrades
+price_targets                     # Phase 9: Price target consensus
+analyst_consensus                 # Phase 9: Buy/hold/sell ratings
+growth_estimates                  # Phase 9: Growth forecasts
 ```
 
-**DuckDB Tables** (13 tables/views):
+**DuckDB Tables** (17 tables/views):
 ```
 financials.annual / financials.quarterly  # Statements
 prices.daily                              # OHLCV
 dividends.history / splits.history        # Corporate actions
-company.metadata                          # Company info
-company.peers                             # Peer groups (16 groups)
+company.metadata / company.peers          # Company info + peer groups
 ratios.financial                          # 9 derived ratios
 growth.annual (VIEW)                      # YoY growth
 user.portfolios                           # Portfolio tracking
-valuation.metrics                         # Phase 8: P/E, P/B, P/S, PEG, dividend yield
-earnings.history (VIEW)                   # Phase 8: Earnings surprises
-earnings.calendar                         # Phase 8: Earnings calendar
-earnings.calendar_upcoming (VIEW)         # Phase 8: Future earnings only
+valuation.metrics                         # Phase 8: Valuation ratios
+earnings.history / earnings.calendar      # Phase 8: Earnings data
+analyst.recommendations                   # Phase 9: Analyst ratings
+analyst.price_targets                     # Phase 9: Price targets
+analyst.consensus                         # Phase 9: Rating consensus
+analyst.growth_estimates                  # Phase 9: Growth forecasts
 ```
 
 ### Key Modules
 
 | Module | Lines | Purpose |
 |--------|-------|---------|
-| `ingest.py` | 1020 | Data fetching, validation, MongoDB storage |
-| `transform.py` | 580 | MongoDB → DuckDB, derived metrics |
-| `query.py` | 705 | One-shot NL queries, SQL generation |
+| `ingest.py` | 1445 | Data fetching, validation, MongoDB storage |
+| `transform.py` | 815 | MongoDB → DuckDB, derived metrics |
+| `query.py` | 730 | One-shot NL queries, SQL generation |
 | `chat.py` | 466 | Conversational interface (20-msg history) |
 | `visualize.py` | 463 | Charts (4 types), financial formatting, exports |
 | `resilience.py` | 306 | Graceful degradation, templates, validation |
@@ -117,6 +121,7 @@ earnings.calendar_upcoming (VIEW)         # Phase 8: Future earnings only
 | `config_loader.py` | 204 | YAML config + env var fallback |
 | `peer_groups.py` | 79 | 16 predefined peer groups |
 | `valuation.py` | 230 | Phase 8: Valuation metrics & earnings tables |
+| `analyst.py` | 250 | Phase 9: Analyst intelligence tables |
 
 ---
 
@@ -170,6 +175,15 @@ earnings.calendar_upcoming (VIEW)         # Phase 8: Future earnings only
 - **Auto-integration**: Earnings data fetched during standard ingestion flow
 - **New tables**: `valuation.metrics`, `earnings.history`, `earnings.calendar`
 
+### Phase 9: Analyst Intelligence & Sentiment ✅
+- **Analyst recommendations**: Historical upgrades/downgrades with firm tracking and action scores
+- **Price targets**: Consensus low/mean/high targets with upside/downside calculations
+- **Analyst consensus**: Buy/hold/sell distributions with weighted rating scores (1-5 scale)
+- **Growth estimates**: Quarterly, annual, and 5-year growth forecasts from analyst consensus
+- **Forward PEG**: Automatically calculated using growth estimates and current valuations
+- **Auto-integration**: Analyst data fetched during standard ingestion flow
+- **New tables**: `analyst.recommendations`, `analyst.price_targets`, `analyst.consensus`, `analyst.growth_estimates`
+
 ---
 
 ## Critical Implementation Details
@@ -185,7 +199,7 @@ has_usd_financials() # financialCurrency or currency == "USD"
 
 **SQL Guardrails**:
 - SELECT-only (WITH/CTEs allowed if final statement is SELECT)
-- Table allow-list: 13 tables enforced (Phase 8: +4 new tables)
+- Table allow-list: 18 tables enforced (Phase 9: +4 analyst tables)
 - Column existence verified (including CTEs)
 - LIMIT ≤ 100 (default: 25)
 
@@ -334,6 +348,18 @@ pytest tests/test_valuation.py -v          # Phase 8: Valuation & earnings
 "When is the next earnings call for TSLA?"
 "Show upcoming earnings this week"
 "Find companies with improving earnings surprise trends"
+```
+
+### Analyst Intelligence (Phase 9)
+```
+"Show me stocks with recent analyst upgrades"
+"Which stocks have the highest upside to price targets?"
+"Find stocks rated 'Strong Buy' with upside > 15%"
+"Show analyst consensus for FAANG companies"
+"Which analysts are most bullish on tech stocks?"
+"Companies with 5-year growth estimates > 20%"
+"Stocks where analysts raised price targets this month"
+"Find downgrades from major investment banks"
 ```
 
 ---
@@ -508,19 +534,18 @@ PRICE_LOOKBACK_DAYS      # Override ingestion.price_lookback_days
 
 ## Project Status
 
-**Production-Ready**: Phase 8 implemented (Valuation Metrics & Earnings Intelligence)
+**Production-Ready**: Phase 9 implemented (Analyst Intelligence & Sentiment)
 
-**Phase 8 Completed** (2025-11-09):
-- ✅ Valuation metrics (P/E, P/B, P/S, PEG, dividend yield, payout ratio)
-- ✅ Market cap classification (Large/Mid/Small cap)
-- ✅ Earnings history (EPS estimates vs actuals, surprise metrics)
-- ✅ Earnings calendar (upcoming earnings dates)
+**Phase 9 Completed** (2025-11-09):
+- ✅ Analyst recommendations (upgrades/downgrades with firm tracking)
+- ✅ Price targets (consensus with upside/downside calculations)
+- ✅ Analyst consensus (buy/hold/sell distributions, weighted scores)
+- ✅ Growth estimates (quarterly, annual, 5-year forecasts)
+- ✅ Forward PEG calculations (integrated with valuation metrics)
 - ✅ Auto-integration with existing ingestion pipeline
-- ✅ 4 new DuckDB tables/views
-- ✅ Comprehensive test suite (test_valuation.py)
+- ✅ 4 new DuckDB tables/views, 4 new MongoDB collections
 
-**Next Steps** (potential Phase 9+):
-- Analyst intelligence (recommendations, price targets, upgrades/downgrades)
+**Next Steps** (potential Phase 10+):
 - Technical analysis (moving averages, RSI, MACD, momentum indicators)
 - Query intelligence (decomposition, smart errors, autocomplete)
 - Real-time data feeds (WebSocket integration)
@@ -531,8 +556,7 @@ PRICE_LOOKBACK_DAYS      # Override ingestion.price_lookback_days
 - Cloud deployment (Docker + Kubernetes)
 
 **Maintainability**:
-- Modular architecture (10 independent modules)
-- Comprehensive test coverage (10 test suites)
+- Modular architecture (11 independent modules)
 - Clear separation of concerns (ingestion | transformation | query)
 - Backward compatibility maintained (legacy scripts supported)
 
@@ -588,4 +612,4 @@ python finangpt.py status
 
 ---
 
-*Last Updated: 2025-11-09 | Version 2.1 | Phase 8 Complete: Valuation Metrics & Earnings Intelligence*
+*Last Updated: 2025-11-09 | Version 2.2 | Phase 9 Complete: Analyst Intelligence & Sentiment*

@@ -47,6 +47,18 @@ An intelligent financial data pipeline that combines comprehensive data ingestio
 - **System Status Monitoring**: Real-time health checks and data freshness statistics
 - **Automated Updates**: Cron-ready scripts for scheduled daily/weekly refreshes
 
+### 📈 Valuation & Earnings Intelligence (Phase 8)
+- **Valuation Metrics**: P/E, P/B, P/S, PEG ratios; dividend yield and payout ratio
+- **Market Cap Classification**: Automatic Large/Mid/Small cap categorization
+- **Earnings Tracking**: EPS estimates vs actuals with surprise metrics
+- **Earnings Calendar**: Upcoming earnings dates with analyst estimates
+
+### 🎯 Analyst Intelligence & Sentiment (Phase 9)
+- **Analyst Recommendations**: Historical upgrades/downgrades with firm-level tracking
+- **Price Targets**: Consensus targets (low/mean/high) with upside potential calculations
+- **Analyst Consensus**: Buy/Hold/Sell rating distributions and weighted scores
+- **Growth Estimates**: Quarterly, annual, and 5-year growth forecasts from analysts
+
 ### 🔒 Enterprise-Grade Safety
 - **Data Validation**: US-only, non-ETF, USD-denominated instruments
 - **SQL Guardrails**: Table allow-lists, column validation, read-only queries
