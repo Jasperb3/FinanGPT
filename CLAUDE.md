@@ -74,6 +74,12 @@ FinanGPT is a Python-based financial data pipeline with an intelligent conversat
 - Ticker validation with autocomplete and spell-check capabilities
 - Debug mode with comprehensive logging and query timing
 
+**Phase 7: Unified Workflow & Automation** ✅
+- Unified CLI entry point (`finangpt.py`) for all operations
+- Configuration file support (`config.yaml`) with environment variable fallback
+- Status command for system health and data freshness monitoring
+- Scheduled update scripts for automated daily refresh (cron-ready)
+
 ## Environment Setup
 
 **Virtual Environment (Required)**:
@@ -1714,6 +1720,423 @@ python -m pytest tests/test_error_resilience.py -v
 - Confirm `resilience.py` is in Python path
 - Check for import errors at startup
 - Verify Ollama connection failure is actually occurring
+
+## Phase 7: Unified Workflow & Automation
+
+### Overview
+
+Phase 7 introduces a unified command-line interface and configuration management system, simplifying the FinanGPT workflow into a single entry point. This phase also adds system status monitoring and automated refresh capabilities for production deployments.
+
+### Key Features
+
+**Unified CLI (`finangpt.py`)**:
+- Single entry point for all FinanGPT operations
+- Consistent command interface across all workflows
+- Built-in help and usage documentation
+- Subprocess management for existing scripts
+
+**Configuration File Support**:
+- YAML-based configuration (`config.yaml`)
+- Environment variable fallback for flexibility
+- Centralized settings management
+- Priority: env vars → config file → defaults
+
+**Status Monitoring**:
+- System health checks (MongoDB, DuckDB)
+- Data freshness statistics
+- Ticker count and table row counts
+- JSON output for programmatic access
+
+**Automation Support**:
+- Scheduled update scripts (daily_refresh.sh)
+- Cron-ready with error handling
+- Email notifications on failure (optional)
+- Logging and status reporting
+
+### Unified CLI Commands
+
+The `finangpt.py` script provides a single entry point for all operations:
+
+```bash
+# Ingest data
+finangpt.py ingest --tickers AAPL,MSFT
+finangpt.py ingest --tickers-file tickers.csv --refresh
+finangpt.py ingest --force --tickers AAPL  # Force re-fetch
+
+# Transform data
+finangpt.py transform
+
+# Query (one-shot)
+finangpt.py query "Show AAPL revenue trends"
+finangpt.py query --template top_revenue --template-params "year=2023,limit=10"
+finangpt.py query --list-templates
+
+# Interactive chat
+finangpt.py chat
+finangpt.py chat --debug
+
+# System status
+finangpt.py status
+finangpt.py status --json  # JSON output
+
+# Full refresh workflow
+finangpt.py refresh --tickers-file tickers.csv
+finangpt.py refresh --tickers AAPL,MSFT,GOOGL
+```
+
+### Configuration File
+
+**File**: `config.yaml`
+
+```yaml
+# FinanGPT Configuration File
+
+database:
+  mongo_uri: mongodb://localhost:27017/financial_data
+  duckdb_path: financial_data.duckdb
+
+ollama:
+  url: http://localhost:11434
+  model: phi4:latest
+  timeout: 60
+  max_retries: 3
+
+ingestion:
+  price_lookback_days: 365
+  auto_refresh_threshold_days: 7
+  batch_size: 50
+  retry_backoff: [1, 2, 4]
+
+query:
+  default_limit: 25
+  max_limit: 100
+  enable_visualizations: true
+  chart_output_dir: charts/
+  export_formats: [csv, json, excel]
+
+features:
+  conversational_mode: true
+  auto_error_recovery: true
+  query_suggestions: true
+  portfolio_tracking: false
+
+logging:
+  level: INFO
+  directory: logs/
+  format: json
+```
+
+**Configuration Priority**:
+1. **Environment variables** (highest priority)
+   - `MONGO_URI`, `OLLAMA_URL`, `MODEL_NAME`, `PRICE_LOOKBACK_DAYS`
+2. **config.yaml file**
+   - Located in project root directory
+3. **Default values** (fallback)
+   - Hard-coded defaults in `config_loader.py`
+
+**Programmatic Access**:
+
+```python
+from config_loader import load_config
+
+# Load configuration
+config = load_config()
+
+# Access settings
+print(config.mongo_uri)
+print(config.model_name)
+print(config.default_limit)
+
+# Custom config path
+config = load_config("/path/to/custom/config.yaml")
+```
+
+### Status Command
+
+The status command provides system health monitoring and data freshness information:
+
+**Text Output**:
+```bash
+$ python finangpt.py status
+
+======================================================================
+FinanGPT System Status
+======================================================================
+
+Timestamp: 2025-11-09T12:00:00Z
+
+📊 Database Status:
+  MongoDB: connected
+  DuckDB: connected
+  Ticker Count: 150
+
+📅 Data Freshness:
+  Average Age: 3.5 days
+  Oldest: 7 days
+  Newest: 1 days
+  Stale Tickers: 10/150 (>7 days)
+
+📁 Table Row Counts:
+  financials.annual: 750
+  financials.quarterly: 3000
+  prices.daily: 54750
+  dividends.history: 1200
+  splits.history: 45
+  company.metadata: 150
+  company.peers: 240
+  ratios.financial: 750
+  user.portfolios: 0
+
+⚙️  Configuration:
+  MongoDB: mongodb://localhost:27017/financial_data
+  DuckDB: financial_data.duckdb
+  Ollama: http://localhost:11434
+  Model: phi4:latest
+
+======================================================================
+```
+
+**JSON Output**:
+```bash
+$ python finangpt.py status --json
+
+{
+  "timestamp": "2025-11-09T12:00:00Z",
+  "database": {
+    "mongodb": "connected",
+    "duckdb": "connected",
+    "ticker_count": 150,
+    "table_counts": {
+      "financials.annual": 750,
+      "financials.quarterly": 3000,
+      ...
+    }
+  },
+  "data_freshness": {
+    "average_age_days": 3.5,
+    "oldest_age_days": 7,
+    "newest_age_days": 1,
+    "stale_ticker_count": 10,
+    "stale_threshold_days": 7
+  },
+  "configuration": {
+    "mongo_uri": "mongodb://localhost:27017/financial_data",
+    "ollama_url": "http://localhost:11434",
+    "model": "phi4:latest",
+    "duckdb_path": "financial_data.duckdb"
+  }
+}
+```
+
+### Full Refresh Workflow
+
+The `refresh` command runs a complete update workflow:
+
+```bash
+$ python finangpt.py refresh --tickers-file tickers.csv
+
+======================================================================
+Full Refresh Workflow
+======================================================================
+
+Step 1: Ingesting data...
+Running: python ingest.py --refresh --tickers-file tickers.csv
+[ingestion output...]
+
+Step 2: Transforming data...
+Running: python transform.py
+[transformation output...]
+
+Step 3: Checking status...
+[status output...]
+
+✅ Full refresh completed successfully!
+```
+
+This command:
+1. Runs incremental data ingestion (`--refresh` mode)
+2. Transforms data to DuckDB
+3. Generates and displays status report
+
+### Scheduled Updates
+
+**Script**: `scripts/daily_refresh.sh`
+
+Automated daily refresh script with error handling and logging:
+
+```bash
+#!/bin/bash
+# Daily refresh script for FinanGPT
+# Runs incremental data refresh and transformation
+
+# Features:
+# - Virtual environment activation
+# - Error handling with exit on failure
+# - Optional email notifications
+# - Status report generation
+# - Logging to logs/ directory
+
+# Usage:
+./scripts/daily_refresh.sh
+
+# Cron example (weekdays at 6 PM):
+# 0 18 * * 1-5 /path/to/FinanGPT/scripts/daily_refresh.sh >> /path/to/logs/cron.log 2>&1
+```
+
+**Script Features**:
+- Activates virtual environment automatically
+- Runs incremental refresh (only updates stale data)
+- Transforms data to DuckDB
+- Generates daily status report (JSON)
+- Email notifications on failure (optional)
+- Comprehensive error handling
+- Colored logging output
+
+**Configuration**:
+
+Edit `scripts/daily_refresh.sh` to customize:
+```bash
+# Set tickers file location
+TICKERS_FILE="$PROJECT_DIR/tickers.csv"
+
+# Enable email notifications on failure
+EMAIL_ON_FAILURE="admin@example.com"
+```
+
+**Cron Setup**:
+
+```bash
+# Edit crontab
+crontab -e
+
+# Add daily refresh (weekdays at 6 PM)
+0 18 * * 1-5 /path/to/FinanGPT/scripts/daily_refresh.sh >> /path/to/FinanGPT/logs/cron.log 2>&1
+
+# Add weekly full refresh (Sundays at 2 AM)
+0 2 * * 0 /path/to/FinanGPT/scripts/daily_refresh.sh >> /path/to/FinanGPT/logs/cron.log 2>&1
+```
+
+### Command Reference
+
+**finangpt.py ingest**:
+- `--tickers AAPL,MSFT` - Comma-separated ticker list
+- `--tickers-file path` - File with tickers (one per line)
+- `--refresh` - Smart refresh mode (only stale data)
+- `--refresh-days N` - Custom staleness threshold
+- `--force` - Force re-fetch all data
+
+**finangpt.py transform**:
+- No arguments - transforms all data
+
+**finangpt.py query**:
+- `question` - Natural language query
+- `--template name` - Use query template
+- `--template-params key=val,key=val` - Template parameters
+- `--list-templates` - Show available templates
+- `--skip-freshness-check` - Skip data freshness check
+- `--no-chart` - Disable chart generation
+- `--no-formatting` - Disable financial formatting
+- `--debug` - Enable debug logging
+
+**finangpt.py chat**:
+- `--skip-freshness-check` - Skip data freshness check
+- `--debug` - Enable debug logging
+
+**finangpt.py status**:
+- `--json` - Output as JSON
+- `--config path` - Custom config file path
+
+**finangpt.py refresh**:
+- `--tickers AAPL,MSFT` - Ticker list
+- `--tickers-file path` - Tickers file
+- `--all-data-types` - Refresh all data types (default)
+- `--config path` - Custom config file path
+
+### Files Added/Modified
+
+**New Files**:
+- `config.yaml` - Default configuration file
+- `config_loader.py` - Configuration loader module (200+ lines)
+- `finangpt.py` - Unified CLI entry point (400+ lines)
+- `scripts/daily_refresh.sh` - Automated refresh script (100+ lines)
+- `tests/test_unified_cli.py` - Test suite (200+ lines)
+
+**Modified Files**:
+- `CLAUDE.md` - Added Phase 7 documentation
+- `README.md` - Updated with unified CLI usage
+
+### Testing
+
+**Test Coverage** (`tests/test_unified_cli.py`):
+
+```bash
+# Run Phase 7 tests
+python -m pytest tests/test_unified_cli.py -v
+
+# Test categories:
+# - Configuration loading (8 tests)
+# - Environment variable override (1 test)
+# - File fallback handling (2 tests)
+# - Status command (2 tests)
+```
+
+**Key Test Cases**:
+- Configuration loading from file
+- Configuration loading from dictionary
+- Default value fallback
+- Environment variable override
+- Invalid YAML handling
+- Missing config file handling
+- Status command structure
+- Status output formatting
+
+### Migration from Separate Scripts
+
+**Before (Phases 1-6)**:
+```bash
+# Multi-step workflow
+python ingest.py --tickers AAPL,MSFT
+python transform.py
+python query.py "Show revenue trends"
+python chat.py
+```
+
+**After (Phase 7)**:
+```bash
+# Unified workflow
+python finangpt.py ingest --tickers AAPL,MSFT
+python finangpt.py transform
+python finangpt.py query "Show revenue trends"
+python finangpt.py chat
+
+# Or single refresh command
+python finangpt.py refresh --tickers AAPL,MSFT
+```
+
+**Both approaches work** - existing scripts remain functional for backward compatibility.
+
+### Troubleshooting
+
+**Config file not found**:
+- Place `config.yaml` in project root directory
+- Or specify path: `finangpt.py --config /path/to/config.yaml`
+- System falls back to defaults if file missing
+
+**Status command shows errors**:
+- Check MongoDB is running: `mongod --version`
+- Check DuckDB file exists: `ls -lh financial_data.duckdb`
+- Verify config.yaml has correct URIs
+
+**Scheduled script fails**:
+- Check virtual environment path in script
+- Verify cron has correct file paths (use absolute paths)
+- Check logs in `logs/cron.log`
+- Test script manually first: `./scripts/daily_refresh.sh`
+
+**Import errors**:
+- Ensure all Phase 7 files are in project root
+- Check `config_loader.py` is importable: `python -c "import config_loader"`
+- Verify `pyyaml` is installed: `pip install pyyaml`
 
 ## Common Issues
 

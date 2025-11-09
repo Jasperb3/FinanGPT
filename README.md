@@ -41,6 +41,12 @@ An intelligent financial data pipeline that combines comprehensive data ingestio
 - **Ticker Validation**: Auto-complete and spell-check for stock ticker symbols
 - **Debug Mode**: Comprehensive logging shows LLM prompts, SQL generation, and query timing
 
+### 🔧 Unified Workflow & Automation
+- **Single CLI Entry Point**: Unified `finangpt.py` command for all operations
+- **Configuration Management**: YAML-based config with environment variable fallback
+- **System Status Monitoring**: Real-time health checks and data freshness statistics
+- **Automated Updates**: Cron-ready scripts for scheduled daily/weekly refreshes
+
 ### 🔒 Enterprise-Grade Safety
 - **Data Validation**: US-only, non-ETF, USD-denominated instruments
 - **SQL Guardrails**: Table allow-lists, column validation, read-only queries
@@ -90,6 +96,24 @@ An intelligent financial data pipeline that combines comprehensive data ingestio
    ```
 
 ### Basic Usage
+
+#### Option 1: Unified CLI (Phase 7 - Recommended)
+
+```bash
+# Single-command workflow
+python finangpt.py refresh --tickers AAPL,MSFT,GOOGL
+
+# Or query directly
+python finangpt.py query "Show AAPL revenue for the last 5 years"
+
+# Interactive chat
+python finangpt.py chat
+
+# Check system status
+python finangpt.py status
+```
+
+#### Option 2: Individual Scripts (Compatible)
 
 **1. Ingest financial data**:
 ```bash
@@ -537,11 +561,12 @@ db.ingestion_metadata.find({"last_fetched": {$lt: threshold.toISOString()}})
 - **Phase 4**: Visual analytics & charting with financial formatting
 - **Phase 5**: Advanced query capabilities (peer groups, window functions, portfolio tracking)
 - **Phase 6**: Error resilience & UX polish (query templates, graceful degradation, debug mode)
+- **Phase 7**: Unified workflow & automation (unified CLI, config management, status monitoring, scheduled updates)
 
 ### Future Enhancements 🚧
-- **Phase 7**: Web dashboard (FastAPI + React frontend)
-- **Phase 8**: Real-time data streaming and alerts
-- **Phase 9**: ML-powered insights and predictions
+- **Phase 8**: Web dashboard (FastAPI + React frontend)
+- **Phase 9**: Real-time data streaming and alerts
+- **Phase 10**: ML-powered insights and predictions
 
 ## 📝 Development
 
