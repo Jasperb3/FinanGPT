@@ -35,6 +35,12 @@ An intelligent financial data pipeline that combines comprehensive data ingestio
 - **Window Functions**: RANK(), LAG(), LEAD(), statistical aggregations
 - **Portfolio Tracking**: Track holdings, calculate returns, analyze performance
 
+### 🛡️ Error Resilience & UX Polish
+- **Graceful Degradation**: Fallback options when Ollama is unavailable (direct SQL, templates)
+- **Query Templates**: 10+ pre-built templates for common queries with parameter substitution
+- **Ticker Validation**: Auto-complete and spell-check for stock ticker symbols
+- **Debug Mode**: Comprehensive logging shows LLM prompts, SQL generation, and query timing
+
 ### 🔒 Enterprise-Grade Safety
 - **Data Validation**: US-only, non-ETF, USD-denominated instruments
 - **SQL Guardrails**: Table allow-lists, column validation, read-only queries
@@ -257,6 +263,61 @@ VALUES
     ('Tech Growth', 'MSFT', 50, '2023-02-20', 280.00, 'Cloud play');
 ```
 
+### Error Resilience & UX Polish (Phase 6)
+
+**Query Templates**:
+```bash
+# List all available templates
+python query.py --list-templates
+
+# Use a template with parameters
+python query.py --template top_revenue --template-params "year=2023,limit=10"
+python query.py --template ticker_comparison --template-params "metric=totalRevenue,tickers='AAPL','MSFT',limit=5"
+python query.py --template peer_group_comparison --template-params "metric=netIncome,peer_group=FAANG,year=2024"
+```
+
+**Available Templates**:
+- `top_revenue`: Top N companies by revenue in a specific year
+- `ticker_comparison`: Compare a specific metric across multiple tickers
+- `revenue_trends`: Show revenue trends for a ticker over N years
+- `profit_margins`: Show profit margins for specific tickers
+- `peer_group_comparison`: Compare metrics across a peer group
+- `dividend_history`: Dividend history for a specific ticker
+- `stock_price_range`: Stock prices within a date range
+- `growth_leaders`: Companies with highest revenue growth
+- `sector_analysis`: Average metrics by sector for a specific year
+
+**Graceful Degradation** (when Ollama is down):
+```bash
+# If Ollama connection fails, you get options:
+# 1. Enter SQL directly (expert mode)
+# 2. Use saved query templates
+# 3. Exit and fix connection
+```
+
+**Debug Mode**:
+```bash
+# Enable comprehensive debug logging
+python query.py --debug "Show AAPL revenue"
+# Shows: system prompt, LLM response, extracted SQL, validated SQL, query timing
+
+# Debug mode in chat
+python chat.py --debug
+```
+
+**Ticker Validation** (programmatic):
+```python
+from resilience import validate_ticker, suggest_tickers
+
+# Check if ticker exists
+if validate_ticker("AAPL", conn):
+    print("Valid ticker")
+
+# Get autocomplete suggestions
+suggestions = suggest_tickers("A", conn, limit=5)
+# Returns: ['AAPL', 'AMD', 'AMZN', ...]
+```
+
 ## 🗃️ Data Schema
 
 ### DuckDB Tables
@@ -309,6 +370,7 @@ python -m pytest tests/ --cov=. --cov-report=html
 - ✅ Conversational interface (history management, error recovery)
 - ✅ Visualization (chart detection, formatting, export functions)
 - ✅ Advanced queries (peer groups, date parsing, window functions)
+- ✅ Error resilience (query templates, ticker validation, graceful degradation)
 
 ## 📚 Example Queries
 
@@ -474,11 +536,12 @@ db.ingestion_metadata.find({"last_fetched": {$lt: threshold.toISOString()}})
 - **Phase 3**: Conversational query interface with error recovery
 - **Phase 4**: Visual analytics & charting with financial formatting
 - **Phase 5**: Advanced query capabilities (peer groups, window functions, portfolio tracking)
+- **Phase 6**: Error resilience & UX polish (query templates, graceful degradation, debug mode)
 
 ### Future Enhancements 🚧
-- **Phase 6**: Web dashboard (FastAPI + React frontend)
-- **Phase 7**: Real-time data streaming and alerts
-- **Phase 8**: ML-powered insights and predictions
+- **Phase 7**: Web dashboard (FastAPI + React frontend)
+- **Phase 8**: Real-time data streaming and alerts
+- **Phase 9**: ML-powered insights and predictions
 
 ## 📝 Development
 

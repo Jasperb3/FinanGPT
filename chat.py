@@ -42,6 +42,16 @@ from visualize import (
     pretty_print_formatted,
 )
 
+# Import Phase 6 resilience features (optional)
+try:
+    from resilience import (
+        handle_ollama_failure,
+        print_debug_info,
+    )
+    RESILIENCE_AVAILABLE = True
+except ImportError:
+    RESILIENCE_AVAILABLE = False
+
 LOGS_DIR = Path("logs")
 MAX_RETRIES = 3
 MAX_HISTORY_LENGTH = 20  # Limit conversation history to avoid token overflow
@@ -177,6 +187,7 @@ def execute_query_with_retry(
     mongo_db: Optional[Database],
     skip_freshness: bool,
     user_query: str = "",
+    debug: bool = False,
 ) -> Optional[Tuple[List[str], List[Tuple], str, pd.DataFrame]]:
     """Execute query with intelligent error recovery and retry logic.
 
@@ -184,12 +195,29 @@ def execute_query_with_retry(
     """
     for attempt in range(MAX_RETRIES):
         try:
-            # Call LLM
-            response_text = call_ollama_chat(base_url, model, conversation_history)
+            # Call LLM with graceful degradation
+            try:
+                response_text = call_ollama_chat(base_url, model, conversation_history)
+            except requests.ConnectionError as conn_err:
+                # Graceful degradation when Ollama is down
+                if RESILIENCE_AVAILABLE and attempt == 0:  # Only on first attempt
+                    print(f"\n⚠️  Ollama connection error: {conn_err}")
+                    sql = handle_ollama_failure(conn_err)
+                    if not sql:
+                        return None
+                    response_text = f"Direct SQL: {sql}"
+                else:
+                    raise
 
             # Extract and validate SQL
             sql = extract_sql(response_text)
             sanitised_sql = validate_sql(sql, schema)
+
+            if debug:
+                print(f"\n[DEBUG] Attempt {attempt + 1}")
+                print(f"[DEBUG] LLM Response:\n{response_text[:200]}...")
+                print(f"[DEBUG] Extracted SQL:\n{sql}")
+                print(f"[DEBUG] Validated SQL:\n{sanitised_sql}\n")
 
             # Check freshness before executing
             if mongo_db and not skip_freshness:
@@ -274,6 +302,7 @@ def run_chat_loop(
     logger: logging.Logger,
     mongo_db: Optional[Database],
     skip_freshness: bool,
+    debug: bool = False,
 ) -> None:
     """Main chat loop with conversation history."""
     # Initialize conversation with system prompt
@@ -322,6 +351,7 @@ def run_chat_loop(
                 mongo_db,
                 skip_freshness,
                 user_input,
+                debug,
             )
 
             if result:
@@ -384,6 +414,11 @@ def main() -> None:
         action="store_true",
         help="Skip the data freshness check before querying.",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable comprehensive debug logging (Phase 6).",
+    )
     args = parser.parse_args()
 
     # Load environment
@@ -420,6 +455,7 @@ def main() -> None:
             logger,
             mongo_db,
             args.skip_freshness_check,
+            args.debug,
         )
     finally:
         conn.close()
