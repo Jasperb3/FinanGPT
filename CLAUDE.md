@@ -1,15 +1,15 @@
 # CLAUDE.md
 
 **Project**: FinanGPT - AI-Powered Financial Data Analysis Platform
-**Status**: Production-ready (Phase 10 implemented)
-**Version**: 2.3 (Updated 2025-11-09)
+**Status**: Production-ready (Phase 11 implemented)
+**Version**: 2.4 (Updated 2025-11-09)
 
 ## Quick Reference
 
-**Tech Stack**: Python 3.x | MongoDB | DuckDB | Ollama (LLM) | yfinance
-**Lines of Code**: ~5,900 Python | 12 core modules
+**Tech Stack**: Python 3.x | MongoDB | DuckDB | Ollama (LLM) | yfinance | SQLite
+**Lines of Code**: ~7,400 Python | 17 core modules
 **Data**: US equities only (non-ETF, USD-denominated)
-**Latest**: Phase 10 - Technical analysis (moving averages, RSI, MACD, Bollinger Bands)
+**Latest**: Phase 11 - Query intelligence (history, smart errors, autocomplete, decomposition)
 
 ### Core Workflows
 
@@ -115,7 +115,7 @@ technical.indicators                      # Phase 10: Technical analysis
 | `ingest.py` | 1445 | Data fetching, validation, MongoDB storage |
 | `transform.py` | 815 | MongoDB → DuckDB, derived metrics |
 | `query.py` | 730 | One-shot NL queries, SQL generation |
-| `chat.py` | 466 | Conversational interface (20-msg history) |
+| `chat.py` | 500 | Conversational interface with history commands |
 | `visualize.py` | 463 | Charts (4 types), financial formatting, exports |
 | `resilience.py` | 306 | Graceful degradation, templates, validation |
 | `finangpt.py` | 420 | Unified CLI, status monitoring |
@@ -124,6 +124,11 @@ technical.indicators                      # Phase 10: Technical analysis
 | `valuation.py` | 230 | Phase 8: Valuation metrics & earnings tables |
 | `analyst.py` | 250 | Phase 9: Analyst intelligence tables |
 | `technical.py` | 175 | Phase 10: Technical indicators calculation |
+| `query_history.py` | 380 | Phase 11: Query history & favorites |
+| `error_handler.py` | 260 | Phase 11: Smart error messages |
+| `autocomplete.py` | 320 | Phase 11: Suggestions engine |
+| `date_parser.py` | 280 | Phase 11: Enhanced date parsing |
+| `query_planner.py` | 360 | Phase 11: Query decomposition |
 
 ---
 
@@ -196,6 +201,16 @@ technical.indicators                      # Phase 10: Technical analysis
 - **52-week analysis**: High/low tracking with percentage distance from current price
 - **Zero data fetching**: All indicators calculated from existing prices.daily using window functions
 - **New table**: `technical.indicators`
+
+### Phase 11: Query Intelligence & UX Enhancement ✅
+- **Query history**: Save all queries to SQLite with SQL, row counts, execution metadata
+- **Favorites**: Star/unstar queries for quick access (`/favorite <id>` command)
+- **Smart error handler**: Context-aware error messages with table/column suggestions
+- **Enhanced date parsing**: Natural language dates (YTD, Q4 2024, last quarter, fiscal year)
+- **Autocomplete engine**: Ticker suggestions with company names, query template suggestions
+- **Query decomposition**: Break complex multi-part queries into sequential steps
+- **New commands**: `/history`, `/favorites`, `/recall <id>`, `/favorite <id>`, `/search <term>`
+- **New modules**: 5 (query_history, error_handler, autocomplete, date_parser, query_planner)
 
 ---
 
@@ -560,32 +575,30 @@ PRICE_LOOKBACK_DAYS      # Override ingestion.price_lookback_days
 
 ## Project Status
 
-**Production-Ready**: Phase 10 implemented (Technical Analysis & Price Momentum)
+**Production-Ready**: Phase 11 implemented (Query Intelligence & UX Enhancement)
 
-**Phase 10 Completed** (2025-11-09):
-- ✅ Moving averages (SMA 20/50/200, EMA 12/26)
-- ✅ RSI indicator (14-day with gain/loss calculations)
-- ✅ MACD with signal line and histogram
-- ✅ Bollinger Bands (20-day, 2 standard deviations)
-- ✅ Volume metrics (20-day average, volume ratio)
-- ✅ Price momentum (1d, 5d, 20d, 60d, 252d percentage changes)
-- ✅ 52-week high/low analysis with distance calculations
-- ✅ Pure SQL window function implementation (no API calls)
-- ✅ 1 new DuckDB table
+**Phase 11 Completed** (2025-11-09):
+- ✅ Query history with SQLite persistence
+- ✅ Favorites system with star/unstar functionality
+- ✅ Smart error handler with contextual suggestions
+- ✅ Enhanced date parser (YTD, quarters, fiscal years, relative dates)
+- ✅ Autocomplete engine for tickers and query templates
+- ✅ Query planner for complex query decomposition
+- ✅ 5 new modules, 5 new chat commands
+- ✅ Backward compatible (Phase 11 features optional)
 
-**Next Steps** (potential Phase 11+):
-- Query intelligence (decomposition, smart errors, autocomplete)
-- Real-time data feeds (WebSocket integration)
+**Next Steps** (potential Phase 12+):
 - Web dashboard (React frontend + FastAPI backend)
+- Real-time data feeds (WebSocket integration)
 - Multi-user authentication (user management)
 - Advanced backtesting (portfolio simulation)
 - API endpoints (REST/GraphQL)
 - Cloud deployment (Docker + Kubernetes)
 
 **Maintainability**:
-- Modular architecture (12 independent modules)
-- Clear separation of concerns (ingestion | transformation | query)
-- Backward compatibility maintained (legacy scripts supported)
+- Modular architecture (17 independent modules)
+- Clear separation of concerns (ingestion | transformation | query | intelligence)
+- Backward compatibility maintained (all Phase 11 features are opt-in)
 
 ---
 
@@ -595,7 +608,7 @@ PRICE_LOOKBACK_DAYS      # Override ingestion.price_lookback_days
 - `ingest.py` - Data fetching and validation
 - `transform.py` - Analytics table generation
 - `query.py` - One-shot NL queries
-- `chat.py` - Conversational interface
+- `chat.py` - Conversational interface with history commands
 - `visualize.py` - Charts and formatting
 - `resilience.py` - Error handling and templates
 - `finangpt.py` - Unified CLI
@@ -604,6 +617,11 @@ PRICE_LOOKBACK_DAYS      # Override ingestion.price_lookback_days
 - `valuation.py` - Phase 8: Valuation metrics & earnings tables
 - `analyst.py` - Phase 9: Analyst intelligence tables
 - `technical.py` - Phase 10: Technical indicators calculation
+- `query_history.py` - Phase 11: Query history & favorites
+- `error_handler.py` - Phase 11: Smart error messages
+- `autocomplete.py` - Phase 11: Suggestions engine
+- `date_parser.py` - Phase 11: Enhanced date parsing
+- `query_planner.py` - Phase 11: Query decomposition
 
 ### Configuration
 - `config.yaml` - Settings (env var override)
@@ -641,4 +659,4 @@ python finangpt.py status
 
 ---
 
-*Last Updated: 2025-11-09 | Version 2.3 | Phase 10 Complete: Technical Analysis & Price Momentum*
+*Last Updated: 2025-11-09 | Version 2.4 | Phase 11 Complete: Query Intelligence & UX Enhancement*

@@ -52,6 +52,19 @@ try:
 except ImportError:
     RESILIENCE_AVAILABLE = False
 
+# Import Phase 11 query intelligence features (optional)
+try:
+    from query_history import (
+        QueryHistory,
+        format_query_history,
+        format_favorites,
+    )
+    from error_handler import SmartErrorHandler
+    from autocomplete import AutocompleteEngine
+    QUERY_INTELLIGENCE_AVAILABLE = True
+except ImportError:
+    QUERY_INTELLIGENCE_AVAILABLE = False
+
 LOGS_DIR = Path("logs")
 MAX_RETRIES = 3
 MAX_HISTORY_LENGTH = 20  # Limit conversation history to avoid token overflow
@@ -158,10 +171,18 @@ def print_help() -> None:
     print("   • Refine queries based on results")
 
     print("\n📝 Special Commands:")
-    print("   /help    - Show this help message")
-    print("   /clear   - Clear conversation history and start fresh")
-    print("   /exit    - Exit the chat interface")
-    print("   /quit    - Exit the chat interface")
+    print("   /help          - Show this help message")
+    print("   /clear         - Clear conversation history and start fresh")
+    print("   /exit          - Exit the chat interface")
+    print("   /quit          - Exit the chat interface")
+
+    if QUERY_INTELLIGENCE_AVAILABLE:
+        print("\n📚 Query History Commands (Phase 11):")
+        print("   /history       - Show recent queries")
+        print("   /favorites     - Show favorite queries")
+        print("   /recall <id>   - Re-run a previous query by ID")
+        print("   /favorite <id> - Mark a query as favorite")
+        print("   /search <term> - Search query history")
 
     print("\n💡 Example conversation:")
     print("   You: Show AAPL revenue for last 5 years")
@@ -311,6 +332,14 @@ def run_chat_loop(
         {"role": "system", "content": system_prompt}
     ]
 
+    # Initialize query history (Phase 11)
+    query_history = None
+    if QUERY_INTELLIGENCE_AVAILABLE:
+        try:
+            query_history = QueryHistory()
+        except Exception as e:
+            print(f"Warning: Could not initialize query history: {e}")
+
     print_welcome_message(schema)
 
     while True:
@@ -335,6 +364,40 @@ def run_chat_loop(
                     {"role": "system", "content": system_prompt}
                 ]
                 print("\n🔄 Conversation history cleared.\n")
+                continue
+
+            # Phase 11: Query history commands
+            if query_history and user_input.lower() == "/history":
+                recent = query_history.get_recent_queries(limit=20)
+                print(format_query_history(recent))
+                continue
+
+            if query_history and user_input.lower() == "/favorites":
+                favorites = query_history.get_favorites()
+                print(format_favorites(favorites))
+                continue
+
+            if query_history and user_input.lower().startswith("/recall "):
+                try:
+                    query_id = int(user_input.split()[1])
+                    saved_query = query_history.get_query(query_id)
+                    if saved_query:
+                        user_input = saved_query["user_query"]
+                        print(f"\n🔄 Recalling query #{query_id}: {user_input}\n")
+                    else:
+                        print(f"\n❌ Query #{query_id} not found.\n")
+                        continue
+                except (ValueError, IndexError):
+                    print("\n❌ Usage: /recall <id>\n")
+                    continue
+
+            if query_history and user_input.lower().startswith("/favorite "):
+                try:
+                    query_id = int(user_input.split()[1])
+                    query_history.mark_favorite(query_id, True)
+                    print(f"\n⭐ Query #{query_id} marked as favorite.\n")
+                except (ValueError, IndexError):
+                    print("\n❌ Usage: /favorite <id>\n")
                 continue
 
             # Add user message to history
@@ -370,6 +433,19 @@ def run_chat_loop(
                     chart_path = create_chart(df, chart_type, f"Query Result - {chart_type.title()} Chart", user_input)
                     if chart_path:
                         print(f"\n📈 Chart saved: {chart_path}")
+
+                # Save to query history (Phase 11)
+                if query_history:
+                    try:
+                        query_history.save_query(
+                            user_query=user_input,
+                            generated_sql=sql,
+                            row_count=len(rows),
+                            execution_time_ms=None  # Can add timing if needed
+                        )
+                    except Exception as e:
+                        # Don't fail on history save error
+                        pass
 
                 # Add successful query to history
                 conversation_history.append({

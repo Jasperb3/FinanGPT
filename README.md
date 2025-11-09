@@ -68,6 +68,14 @@ An intelligent financial data pipeline that combines comprehensive data ingestio
 - **Price Momentum**: Percentage changes over multiple timeframes (1d to 252d)
 - **52-Week Analysis**: High/low tracking with distance calculations
 
+### 🧠 Query Intelligence & UX Enhancement (Phase 11)
+- **Query History**: Save all queries with SQL, row counts, and execution metadata
+- **Favorites**: Star important queries for quick access and reuse
+- **Smart Error Messages**: Context-aware error handling with helpful suggestions
+- **Enhanced Date Parsing**: Natural language dates ("last quarter", "Q4 2024", "YTD")
+- **Ticker Autocomplete**: Intelligent suggestions with company names
+- **Query Decomposition**: Break complex multi-part queries into sequential steps
+
 ### 🔒 Enterprise-Grade Safety
 - **Data Validation**: US-only, non-ETF, USD-denominated instruments
 - **SQL Guardrails**: Table allow-lists, column validation, read-only queries
@@ -586,11 +594,12 @@ db.ingestion_metadata.find({"last_fetched": {$lt: threshold.toISOString()}})
 - **Phase 8**: Valuation metrics & earnings intelligence (P/E, P/B, P/S, PEG ratios, earnings surprises)
 - **Phase 9**: Analyst intelligence & sentiment (recommendations, price targets, consensus ratings, growth estimates)
 - **Phase 10**: Technical analysis & price momentum (moving averages, RSI, MACD, Bollinger Bands, volume analysis)
+- **Phase 11**: Query intelligence & UX enhancement (query history, smart errors, autocomplete, query decomposition)
 
 ### Future Enhancements 🚧
-- **Phase 11**: Web dashboard (FastAPI + React frontend)
-- **Phase 12**: Real-time data streaming and alerts
-- **Phase 13**: ML-powered insights and predictions
+- **Phase 12**: Web dashboard (FastAPI + React frontend)
+- **Phase 13**: Real-time data streaming and alerts
+- **Phase 14**: ML-powered insights and predictions
 
 ## 📝 Development
 
