@@ -32,6 +32,7 @@ MAX_ATTEMPTS = 3
 EST = ZoneInfo("US/Eastern")
 UTC = ZoneInfo("UTC")
 LOGS_DIR = Path("logs")
+PRICE_LOOKBACK_DAYS = int(os.getenv("PRICE_LOOKBACK_DAYS", "365"))
 
 ALLOWED_EQUITY_TYPES = {
     "EQUITY",
@@ -299,6 +300,47 @@ def ingest_symbol(
                     rows=rows,
                     duration_ms=_duration_ms(start),
                 )
+                # Track metadata for financials
+                update_ingestion_metadata(
+                    collections["metadata"],
+                    symbol,
+                    f"financials_{period}",
+                    "success",
+                    rows,
+                )
+
+            # Fetch and store additional data types
+            try:
+                # Price history
+                price_df = fetch_price_history(ticker_obj, symbol)
+                if price_df is not None:
+                    price_rows = upsert_price_history(collections["prices"], symbol, price_df)
+                    log_event(logger, phase="ingest.prices", ticker=symbol, rows=price_rows, duration_ms=_duration_ms(start))
+                    update_ingestion_metadata(collections["metadata"], symbol, "prices_daily", "success", price_rows)
+
+                # Dividends
+                div_df = fetch_dividends(ticker_obj)
+                if div_df is not None:
+                    div_rows = upsert_dividends(collections["dividends"], symbol, div_df)
+                    log_event(logger, phase="ingest.dividends", ticker=symbol, rows=div_rows, duration_ms=_duration_ms(start))
+                    update_ingestion_metadata(collections["metadata"], symbol, "dividends_history", "success", div_rows)
+
+                # Stock splits
+                split_df = fetch_splits(ticker_obj)
+                if split_df is not None:
+                    split_rows = upsert_splits(collections["splits"], symbol, split_df)
+                    log_event(logger, phase="ingest.splits", ticker=symbol, rows=split_rows, duration_ms=_duration_ms(start))
+                    update_ingestion_metadata(collections["metadata"], symbol, "splits_history", "success", split_rows)
+
+                # Company metadata
+                metadata = extract_company_metadata(info)
+                meta_rows = upsert_company_metadata(collections["company_metadata"], symbol, metadata)
+                log_event(logger, phase="ingest.metadata", ticker=symbol, rows=meta_rows, duration_ms=_duration_ms(start))
+                update_ingestion_metadata(collections["metadata"], symbol, "company_metadata", "success", meta_rows)
+
+            except Exception as data_err:
+                log_event(logger, phase="ingest.additional_data", ticker=symbol, error=str(data_err))
+
             return
         except UnsupportedInstrument as exc:
             log_event(
@@ -478,6 +520,227 @@ def _duration_ms(start: float) -> int:
     return int((time.time() - start) * 1000)
 
 
+def fetch_price_history(ticker_obj: Any, symbol: str, lookback_days: int = PRICE_LOOKBACK_DAYS) -> Optional[pd.DataFrame]:
+    """Fetch daily price history (OHLCV) for the ticker."""
+    try:
+        history = ticker_obj.history(period=f"{lookback_days}d")
+        if history.empty:
+            return None
+        # Reset index to get date as a column
+        history = history.reset_index()
+        # Ensure date is normalized
+        if 'Date' in history.columns:
+            history['date'] = pd.to_datetime(history['Date']).dt.date
+            history = history.drop(columns=['Date'])
+        return history
+    except Exception as err:
+        return None
+
+
+def fetch_dividends(ticker_obj: Any) -> Optional[pd.DataFrame]:
+    """Fetch dividend history for the ticker."""
+    try:
+        divs = ticker_obj.dividends
+        if divs.empty:
+            return None
+        df = divs.reset_index()
+        df.columns = ['date', 'amount']
+        df['date'] = pd.to_datetime(df['date']).dt.date
+        return df
+    except Exception:
+        return None
+
+
+def fetch_splits(ticker_obj: Any) -> Optional[pd.DataFrame]:
+    """Fetch stock split history for the ticker."""
+    try:
+        splits = ticker_obj.splits
+        if splits.empty:
+            return None
+        df = splits.reset_index()
+        df.columns = ['date', 'ratio']
+        df['date'] = pd.to_datetime(df['date']).dt.date
+        return df
+    except Exception:
+        return None
+
+
+def extract_company_metadata(info: Mapping[str, Any]) -> Dict[str, Any]:
+    """Extract relevant company metadata from yfinance info dict."""
+    return {
+        "longName": info.get("longName"),
+        "shortName": info.get("shortName"),
+        "sector": info.get("sector"),
+        "industry": info.get("industry"),
+        "website": info.get("website"),
+        "country": info.get("country"),
+        "exchange": info.get("exchange"),
+        "quoteType": info.get("quoteType"),
+        "marketCap": info.get("marketCap"),
+        "employees": info.get("fullTimeEmployees"),
+        "description": info.get("longBusinessSummary"),
+        "currency": info.get("currency"),
+        "financialCurrency": info.get("financialCurrency"),
+    }
+
+
+def upsert_price_history(collection: Collection, ticker: str, price_df: pd.DataFrame) -> int:
+    """Upsert price history to MongoDB."""
+    if price_df is None or price_df.empty:
+        return 0
+
+    operations: List[UpdateOne] = []
+    fetched_at = datetime.utcnow().isoformat()
+
+    for _, row in price_df.iterrows():
+        date_val = row['date']
+        if isinstance(date_val, pd.Timestamp):
+            date_val = date_val.date()
+        date_iso = datetime.combine(date_val, dt_time(hour=16, tzinfo=EST)).astimezone(UTC).isoformat()
+
+        document = {
+            "ticker": ticker,
+            "date": date_iso,
+            "open": float(row.get('Open', 0)) if pd.notna(row.get('Open')) else None,
+            "high": float(row.get('High', 0)) if pd.notna(row.get('High')) else None,
+            "low": float(row.get('Low', 0)) if pd.notna(row.get('Low')) else None,
+            "close": float(row.get('Close', 0)) if pd.notna(row.get('Close')) else None,
+            "adj_close": float(row.get('Adj Close', 0)) if pd.notna(row.get('Adj Close')) else None,
+            "volume": int(row.get('Volume', 0)) if pd.notna(row.get('Volume')) else None,
+            "fetched_at": fetched_at,
+        }
+
+        operations.append(
+            UpdateOne(
+                {"ticker": ticker, "date": date_iso},
+                {"$set": document},
+                upsert=True,
+            )
+        )
+
+    if operations:
+        collection.bulk_write(operations, ordered=False)
+        return len(operations)
+    return 0
+
+
+def upsert_dividends(collection: Collection, ticker: str, div_df: pd.DataFrame) -> int:
+    """Upsert dividend history to MongoDB."""
+    if div_df is None or div_df.empty:
+        return 0
+
+    operations: List[UpdateOne] = []
+    fetched_at = datetime.utcnow().isoformat()
+
+    for _, row in div_df.iterrows():
+        date_val = row['date']
+        if isinstance(date_val, pd.Timestamp):
+            date_val = date_val.date()
+        date_iso = datetime.combine(date_val, dt_time(hour=16, tzinfo=EST)).astimezone(UTC).isoformat()
+
+        document = {
+            "ticker": ticker,
+            "date": date_iso,
+            "amount": float(row['amount']),
+            "fetched_at": fetched_at,
+        }
+
+        operations.append(
+            UpdateOne(
+                {"ticker": ticker, "date": date_iso},
+                {"$set": document},
+                upsert=True,
+            )
+        )
+
+    if operations:
+        collection.bulk_write(operations, ordered=False)
+        return len(operations)
+    return 0
+
+
+def upsert_splits(collection: Collection, ticker: str, split_df: pd.DataFrame) -> int:
+    """Upsert stock split history to MongoDB."""
+    if split_df is None or split_df.empty:
+        return 0
+
+    operations: List[UpdateOne] = []
+    fetched_at = datetime.utcnow().isoformat()
+
+    for _, row in split_df.iterrows():
+        date_val = row['date']
+        if isinstance(date_val, pd.Timestamp):
+            date_val = date_val.date()
+        date_iso = datetime.combine(date_val, dt_time(hour=16, tzinfo=EST)).astimezone(UTC).isoformat()
+
+        document = {
+            "ticker": ticker,
+            "date": date_iso,
+            "ratio": float(row['ratio']),
+            "fetched_at": fetched_at,
+        }
+
+        operations.append(
+            UpdateOne(
+                {"ticker": ticker, "date": date_iso},
+                {"$set": document},
+                upsert=True,
+            )
+        )
+
+    if operations:
+        collection.bulk_write(operations, ordered=False)
+        return len(operations)
+    return 0
+
+
+def upsert_company_metadata(collection: Collection, ticker: str, metadata: Dict[str, Any]) -> int:
+    """Upsert company metadata to MongoDB."""
+    if not metadata:
+        return 0
+
+    fetched_at = datetime.utcnow().isoformat()
+    document = {
+        "ticker": ticker,
+        "metadata": metadata,
+        "fetched_at": fetched_at,
+        "last_updated": fetched_at,
+    }
+
+    collection.update_one(
+        {"ticker": ticker},
+        {"$set": document},
+        upsert=True,
+    )
+    return 1
+
+
+def update_ingestion_metadata(
+    collection: Collection,
+    ticker: str,
+    data_type: str,
+    status: str,
+    record_count: int = 0,
+    last_successful_date: Optional[str] = None,
+) -> None:
+    """Track ingestion metadata for freshness monitoring."""
+    document = {
+        "ticker": ticker,
+        "data_type": data_type,
+        "last_fetched": datetime.utcnow().isoformat(),
+        "status": status,
+        "record_count": record_count,
+    }
+    if last_successful_date:
+        document["last_successful_date"] = last_successful_date
+
+    collection.update_one(
+        {"ticker": ticker, "data_type": data_type},
+        {"$set": document},
+        upsert=True,
+    )
+
+
 def main() -> None:
     load_dotenv()
     mongo_uri = os.getenv("MONGO_URI")
@@ -490,9 +753,30 @@ def main() -> None:
         database = load_database(client, mongo_uri)
         annual_collection = database["raw_annual"]
         quarterly_collection = database["raw_quarterly"]
+        prices_collection = database["stock_prices_daily"]
+        dividends_collection = database["dividends_history"]
+        splits_collection = database["splits_history"]
+        metadata_collection = database["company_metadata"]
+        ingestion_metadata_collection = database["ingestion_metadata"]
+
+        # Ensure indexes
         ensure_indexes(annual_collection)
         ensure_indexes(quarterly_collection)
-        collections = {"annual": annual_collection, "quarterly": quarterly_collection}
+        ensure_indexes(prices_collection)
+        ensure_indexes(dividends_collection)
+        ensure_indexes(splits_collection)
+        metadata_collection.create_index("ticker", unique=True)
+        ingestion_metadata_collection.create_index([("ticker", 1), ("data_type", 1)], unique=True)
+
+        collections = {
+            "annual": annual_collection,
+            "quarterly": quarterly_collection,
+            "prices": prices_collection,
+            "dividends": dividends_collection,
+            "splits": splits_collection,
+            "company_metadata": metadata_collection,
+            "metadata": ingestion_metadata_collection,
+        }
         for ticker in tickers:
             ingest_symbol(ticker, collections, logger)
 

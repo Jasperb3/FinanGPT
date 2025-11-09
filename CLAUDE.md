@@ -5,9 +5,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project Overview
 
 FinanGPT is a Python-based financial data pipeline that:
-- Ingests US-only stock financials from yfinance (annual & quarterly)
+- Ingests US-only stock financials from yfinance (annual & quarterly statements)
+- Ingests price history (OHLCV), dividends, stock splits, and company metadata
 - Stores raw data in MongoDB with strict validation (non-ETF, USD-only, US-listed)
-- Transforms data into DuckDB for analytics
+- Transforms data into DuckDB for analytics with derived ratios and growth metrics
+- Tracks data freshness for automated refresh monitoring
 - Provides a natural language query interface via LLM→SQL using Ollama
 
 ## Environment Setup
@@ -29,6 +31,7 @@ pip install -r requirements.txt
 MONGO_URI=mongodb://localhost:27017/financial_data  # Must include database name
 OLLAMA_URL=http://localhost:11434
 MODEL_NAME=gpt-oss:latest  # or phi4:latest
+PRICE_LOOKBACK_DAYS=365  # Default: 1 year of price history
 ```
 
 **Required Services**:
@@ -68,23 +71,38 @@ python -m pytest tests -v -s
 ### Three-Stage Pipeline
 
 1. **Ingestion (`ingest.py`)**:
-   - Fetches statements from yfinance with exponential backoff (3 attempts)
+   - Fetches financial statements from yfinance with exponential backoff (3 attempts)
+   - Fetches price history (OHLCV), dividends, stock splits, and company metadata
    - Validates: US-listed, non-ETF, USD currency
    - Normalizes dates to UTC (16:00 US/Eastern)
    - Merges Income Statement + Balance Sheet + Cash Flow per reporting period
-   - Upserts to MongoDB `raw_annual` / `raw_quarterly` collections
-   - Compound index: `{ticker: 1, date: 1}` (unique)
+   - Upserts to MongoDB collections:
+     - `raw_annual` / `raw_quarterly` (financial statements)
+     - `stock_prices_daily` (OHLCV data)
+     - `dividends_history` (dividend payments)
+     - `splits_history` (stock split events)
+     - `company_metadata` (sector, industry, description, etc.)
+     - `ingestion_metadata` (freshness tracking)
+   - Compound index: `{ticker: 1, date: 1}` (unique) on time-series collections
 
 2. **Transformation (`transform.py`)**:
    - Reads from MongoDB raw collections
    - Flattens nested payloads into numeric-only columns
-   - Loads into DuckDB tables: `financials.annual` / `financials.quarterly`
+   - Loads into DuckDB tables:
+     - `financials.annual` / `financials.quarterly` (statements)
+     - `prices.daily` (OHLCV price data)
+     - `dividends.history` (dividend payments)
+     - `splits.history` (stock splits)
+     - `company.metadata` (company information)
+     - `ratios.financial` (derived metrics: ROE, ROA, margins, etc.)
+   - Creates `growth.annual` view (YoY revenue/income growth)
    - Idempotent via delete-then-insert on `{ticker, date}`
 
 3. **Query (`query.py`)**:
    - Introspects DuckDB schema to build dynamic system prompt
    - Calls Ollama `/api/chat` endpoint with schema-aware prompt
-   - Validates SQL: table allow-list, column verification, single SELECT only
+   - Validates SQL: table allow-list, column verification, SELECT only
+   - Supports 8 table schemas (financials, prices, dividends, splits, metadata, ratios, growth)
    - Enforces LIMIT 25 (default) / 100 (max)
    - Executes against DuckDB and pretty-prints results
 
@@ -98,7 +116,14 @@ python -m pytest tests -v -s
 
 **SQL Guardrails** (`query.py`):
 - Only SELECT statements allowed (no DDL/DML/multi-statement); top-level `WITH` clauses and CTEs are supported so long as the final statement is a SELECT.
-- Table allow-list: `financials.annual`, `financials.quarterly`
+- Table allow-list:
+  - `financials.annual`, `financials.quarterly`
+  - `prices.daily`
+  - `dividends.history`
+  - `splits.history`
+  - `company.metadata`
+  - `ratios.financial`
+  - `growth.annual`
 - All columns must exist in schema (CTEs inherit the same validation; references must resolve to a prior CTE or allowed table)
 - LIMIT ≤ 100 (auto-adds LIMIT 25 if missing)
 
@@ -132,7 +157,9 @@ When adding new fields, extend this mapping to handle yfinance variations.
 }
 ```
 
-**DuckDB Schema** (`financials.annual` / `financials.quarterly`):
+**DuckDB Schemas**:
+
+`financials.annual` / `financials.quarterly`:
 ```sql
 ticker VARCHAR
 date DATE
@@ -141,7 +168,82 @@ totalAssets DOUBLE
 totalLiabilities DOUBLE
 operatingCashFlow DOUBLE
 totalRevenue DOUBLE
+shareholderEquity DOUBLE
+freeCashFlow DOUBLE
+grossProfit DOUBLE
+ebitda DOUBLE
 -- [additional numeric columns sorted alphabetically]
+```
+
+`prices.daily`:
+```sql
+ticker VARCHAR
+date DATE
+open DOUBLE
+high DOUBLE
+low DOUBLE
+close DOUBLE
+adj_close DOUBLE
+volume BIGINT
+```
+
+`dividends.history`:
+```sql
+ticker VARCHAR
+date DATE
+amount DOUBLE
+```
+
+`splits.history`:
+```sql
+ticker VARCHAR
+date DATE
+ratio DOUBLE
+```
+
+`company.metadata`:
+```sql
+ticker VARCHAR
+longName VARCHAR
+shortName VARCHAR
+sector VARCHAR
+industry VARCHAR
+website VARCHAR
+country VARCHAR
+exchange VARCHAR
+quoteType VARCHAR
+marketCap BIGINT
+employees INTEGER
+description TEXT
+currency VARCHAR
+financialCurrency VARCHAR
+```
+
+`ratios.financial`:
+```sql
+ticker VARCHAR
+date DATE
+net_margin DOUBLE          -- netIncome / totalRevenue
+roe DOUBLE                 -- Return on Equity: netIncome / shareholderEquity
+roa DOUBLE                 -- Return on Assets: netIncome / totalAssets
+debt_ratio DOUBLE          -- totalLiabilities / totalAssets
+cash_conversion DOUBLE     -- operatingCashFlow / netIncome
+fcf_margin DOUBLE          -- freeCashFlow / totalRevenue
+asset_turnover DOUBLE      -- totalRevenue / totalAssets
+gross_margin DOUBLE        -- grossProfit / totalRevenue
+ebitda_margin DOUBLE       -- ebitda / totalRevenue
+```
+
+`growth.annual` (VIEW):
+```sql
+ticker VARCHAR
+date DATE
+totalRevenue DOUBLE
+netIncome DOUBLE
+prior_revenue DOUBLE
+prior_income DOUBLE
+revenue_growth_yoy DOUBLE  -- (current - prior) / prior revenue
+income_growth_yoy DOUBLE   -- (current - prior) / prior income
 ```
 
 ## Logging
@@ -214,17 +316,45 @@ The system prompt is **dynamically generated** from DuckDB schema (query.py:67-8
 
 When schema changes (new fields added), no code changes needed—prompt auto-updates.
 
+## Example Natural Language Queries
+
+With the enhanced data sources, you can now ask:
+
+**Financial Analysis**:
+- "Show AAPL's profit margins over the last 5 years" → Uses `ratios.financial`
+- "Which companies have the highest ROE in the tech sector?" → Joins `ratios.financial` + `company.metadata`
+- "Compare MSFT and GOOGL revenue growth year-over-year" → Uses `growth.annual`
+
+**Price & Market Data**:
+- "What was TSLA's closing price on 2024-01-15?" → Uses `prices.daily`
+- "Show AAPL's stock performance for the last quarter" → Uses `prices.daily` with date filters
+- "Which stocks have paid dividends in 2024?" → Uses `dividends.history`
+
+**Company Information**:
+- "List all companies in the semiconductors industry" → Uses `company.metadata`
+- "What is Microsoft's market cap?" → Uses `company.metadata`
+- "Show me all stocks in the Technology sector" → Uses `company.metadata`
+
+**Combined Analysis**:
+- "Show companies with ROE > 20% and dividend yield > 2%" → Joins `ratios.financial` + `dividends.history` + `prices.daily`
+- "Find stocks with positive revenue growth and negative debt ratio changes" → Joins `growth.annual` + `ratios.financial`
+
 ## Extension Points
 
-**Adding Derived Ratios**:
-- Option 1: Compute in `transform.py` before DuckDB insert
-- Option 2: Define as virtual columns in DuckDB schema
-- Option 3: Let LLM compute at query time (e.g., `netIncome / totalRevenue AS margin`)
+**Adding More Derived Ratios**:
+- Edit `create_ratios_table()` in `transform.py:254`
+- Add new CASE WHEN calculations (e.g., P/E ratio with price data)
+- Re-run `transform.py` to rebuild the table
 
 **Expanding Field Coverage**:
-- Update `FIELD_MAPPINGS` in `ingest.py` to handle new yfinance field names
+- Update `FIELD_MAPPINGS` in `ingest.py:45-101` to handle new yfinance field names
 - No schema migration needed; just re-run `ingest.py` + `transform.py`
 
 **Alternative LLM Providers**:
 - Replace `call_ollama()` in `query.py:89` with OpenAI/Anthropic client
 - Keep `validate_sql()` guardrails intact regardless of provider
+
+**Data Freshness Monitoring**:
+- Query `ingestion_metadata` collection in MongoDB to check last fetch times
+- Filter by `data_type` to see which data sources need refreshing
+- Use `last_successful_date` to identify gaps in historical data

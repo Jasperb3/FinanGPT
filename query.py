@@ -20,7 +20,16 @@ from dotenv import load_dotenv
 LOGS_DIR = Path("logs")
 DEFAULT_LIMIT = 25
 MAX_LIMIT = 100
-ALLOWED_TABLES = ("financials.annual", "financials.quarterly")
+ALLOWED_TABLES = (
+    "financials.annual",
+    "financials.quarterly",
+    "prices.daily",
+    "dividends.history",
+    "splits.history",
+    "company.metadata",
+    "ratios.financial",
+    "growth.annual",
+)
 
 
 def configure_logger() -> logging.Logger:

@@ -116,11 +116,12 @@ def prepare_dataframe(documents: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
     return frame
 
 
-def upsert_dataframe(conn: duckdb.DuckDBPyConnection, frame: pd.DataFrame, table: str) -> int:
+def upsert_dataframe(conn: duckdb.DuckDBPyConnection, frame: pd.DataFrame, table: str, schema: str = None) -> int:
     if frame.empty:
         return 0
     view_name = f"staging_{table.replace('.', '_')}"
-    conn.execute("CREATE SCHEMA IF NOT EXISTS financials")
+    if schema:
+        conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
     conn.register(view_name, frame)
     conn.execute(f"CREATE TABLE IF NOT EXISTS {table} AS SELECT * FROM {view_name} LIMIT 0")
     conn.execute(
@@ -136,24 +137,253 @@ def upsert_dataframe(conn: duckdb.DuckDBPyConnection, frame: pd.DataFrame, table
     return len(frame)
 
 
+def prepare_prices_dataframe(documents: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
+    """Transform price history documents into DataFrame."""
+    rows: List[Dict[str, Any]] = []
+    for doc in documents:
+        ticker = doc.get("ticker")
+        date_value = doc.get("date")
+        if not ticker or not date_value:
+            continue
+        try:
+            parsed_date = parse_iso_date(date_value)
+        except ValueError:
+            continue
+
+        row = {
+            "ticker": ticker,
+            "date": parsed_date,
+            "open": doc.get("open"),
+            "high": doc.get("high"),
+            "low": doc.get("low"),
+            "close": doc.get("close"),
+            "adj_close": doc.get("adj_close"),
+            "volume": doc.get("volume"),
+        }
+        rows.append(row)
+
+    if not rows:
+        return pd.DataFrame(columns=["ticker", "date", "open", "high", "low", "close", "adj_close", "volume"])
+    return pd.DataFrame(rows)
+
+
+def prepare_dividends_dataframe(documents: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
+    """Transform dividend documents into DataFrame."""
+    rows: List[Dict[str, Any]] = []
+    for doc in documents:
+        ticker = doc.get("ticker")
+        date_value = doc.get("date")
+        if not ticker or not date_value:
+            continue
+        try:
+            parsed_date = parse_iso_date(date_value)
+        except ValueError:
+            continue
+
+        row = {
+            "ticker": ticker,
+            "date": parsed_date,
+            "amount": doc.get("amount"),
+        }
+        rows.append(row)
+
+    if not rows:
+        return pd.DataFrame(columns=["ticker", "date", "amount"])
+    return pd.DataFrame(rows)
+
+
+def prepare_splits_dataframe(documents: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
+    """Transform stock split documents into DataFrame."""
+    rows: List[Dict[str, Any]] = []
+    for doc in documents:
+        ticker = doc.get("ticker")
+        date_value = doc.get("date")
+        if not ticker or not date_value:
+            continue
+        try:
+            parsed_date = parse_iso_date(date_value)
+        except ValueError:
+            continue
+
+        row = {
+            "ticker": ticker,
+            "date": parsed_date,
+            "ratio": doc.get("ratio"),
+        }
+        rows.append(row)
+
+    if not rows:
+        return pd.DataFrame(columns=["ticker", "date", "ratio"])
+    return pd.DataFrame(rows)
+
+
+def prepare_metadata_dataframe(documents: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
+    """Transform company metadata documents into DataFrame."""
+    rows: List[Dict[str, Any]] = []
+    for doc in documents:
+        ticker = doc.get("ticker")
+        metadata = doc.get("metadata", {})
+        if not ticker:
+            continue
+
+        row = {
+            "ticker": ticker,
+            "longName": metadata.get("longName"),
+            "shortName": metadata.get("shortName"),
+            "sector": metadata.get("sector"),
+            "industry": metadata.get("industry"),
+            "website": metadata.get("website"),
+            "country": metadata.get("country"),
+            "exchange": metadata.get("exchange"),
+            "quoteType": metadata.get("quoteType"),
+            "marketCap": metadata.get("marketCap"),
+            "employees": metadata.get("employees"),
+            "description": metadata.get("description"),
+            "currency": metadata.get("currency"),
+            "financialCurrency": metadata.get("financialCurrency"),
+        }
+        rows.append(row)
+
+    if not rows:
+        return pd.DataFrame(columns=["ticker", "longName", "shortName", "sector", "industry", "website",
+                                      "country", "exchange", "quoteType", "marketCap", "employees",
+                                      "description", "currency", "financialCurrency"])
+    return pd.DataFrame(rows)
+
+
+def create_ratios_table(conn: duckdb.DuckDBPyConnection) -> int:
+    """Create derived financial ratios table from annual financials."""
+    try:
+        conn.execute("CREATE SCHEMA IF NOT EXISTS ratios")
+        conn.execute("DROP TABLE IF EXISTS ratios.financial")
+        result = conn.execute("""
+            CREATE TABLE ratios.financial AS
+            SELECT
+                ticker,
+                date,
+                CASE WHEN totalRevenue > 0 THEN netIncome / totalRevenue ELSE NULL END AS net_margin,
+                CASE WHEN shareholderEquity > 0 THEN netIncome / shareholderEquity ELSE NULL END AS roe,
+                CASE WHEN totalAssets > 0 THEN netIncome / totalAssets ELSE NULL END AS roa,
+                CASE WHEN totalAssets > 0 THEN totalLiabilities / totalAssets ELSE NULL END AS debt_ratio,
+                CASE WHEN netIncome > 0 THEN operatingCashFlow / netIncome ELSE NULL END AS cash_conversion,
+                CASE WHEN totalRevenue > 0 THEN freeCashFlow / totalRevenue ELSE NULL END AS fcf_margin,
+                CASE WHEN totalAssets > 0 THEN totalRevenue / totalAssets ELSE NULL END AS asset_turnover,
+                CASE WHEN totalRevenue > 0 THEN grossProfit / totalRevenue ELSE NULL END AS gross_margin,
+                CASE WHEN totalRevenue > 0 THEN ebitda / totalRevenue ELSE NULL END AS ebitda_margin
+            FROM financials.annual
+            WHERE totalRevenue IS NOT NULL
+        """)
+        count = conn.execute("SELECT COUNT(*) FROM ratios.financial").fetchone()[0]
+        return count
+    except Exception as e:
+        print(f"Error creating ratios table: {e}")
+        return 0
+
+
+def create_growth_view(conn: duckdb.DuckDBPyConnection) -> int:
+    """Create year-over-year growth view."""
+    try:
+        conn.execute("CREATE SCHEMA IF NOT EXISTS growth")
+        conn.execute("DROP VIEW IF EXISTS growth.annual")
+        conn.execute("""
+            CREATE VIEW growth.annual AS
+            SELECT
+                current.ticker,
+                current.date,
+                current.totalRevenue,
+                current.netIncome,
+                prior.totalRevenue AS prior_revenue,
+                prior.netIncome AS prior_income,
+                CASE
+                    WHEN prior.totalRevenue > 0
+                    THEN (current.totalRevenue - prior.totalRevenue) / prior.totalRevenue
+                    ELSE NULL
+                END AS revenue_growth_yoy,
+                CASE
+                    WHEN prior.netIncome > 0
+                    THEN (current.netIncome - prior.netIncome) / prior.netIncome
+                    ELSE NULL
+                END AS income_growth_yoy
+            FROM financials.annual AS current
+            LEFT JOIN financials.annual AS prior
+                ON current.ticker = prior.ticker
+                AND YEAR(current.date) = YEAR(prior.date) + 1
+        """)
+        count = conn.execute("SELECT COUNT(*) FROM growth.annual").fetchone()[0]
+        return count
+    except Exception as e:
+        print(f"Error creating growth view: {e}")
+        return 0
+
+
 def main() -> None:
     load_dotenv()
     mongo_uri = os.getenv("MONGO_URI")
     if not mongo_uri:
         raise SystemExit("MONGO_URI is not set.")
     logger = configure_logger()
+
+    # Fetch all data from MongoDB
     with MongoClient(mongo_uri) as client:
         database = load_database(client, mongo_uri)
         annual_docs = fetch_documents(database["raw_annual"])
         quarterly_docs = fetch_documents(database["raw_quarterly"])
+        prices_docs = fetch_documents(database["stock_prices_daily"])
+        dividends_docs = fetch_documents(database["dividends_history"])
+        splits_docs = fetch_documents(database["splits_history"])
+        metadata_docs = fetch_documents(database["company_metadata"])
+
+    # Prepare DataFrames
     annual_frame = prepare_dataframe(annual_docs)
     quarterly_frame = prepare_dataframe(quarterly_docs)
+    prices_frame = prepare_prices_dataframe(prices_docs)
+    dividends_frame = prepare_dividends_dataframe(dividends_docs)
+    splits_frame = prepare_splits_dataframe(splits_docs)
+    metadata_frame = prepare_metadata_dataframe(metadata_docs)
+
+    # Transform to DuckDB
     conn = duckdb.connect(DUCKDB_PATH)
     try:
-        annual_rows = upsert_dataframe(conn, annual_frame, ANNUAL_TABLE)
+        # Financial statements
+        annual_rows = upsert_dataframe(conn, annual_frame, ANNUAL_TABLE, "financials")
         log_event(logger, phase="transform.annual", rows=annual_rows)
-        quarterly_rows = upsert_dataframe(conn, quarterly_frame, QUARTERLY_TABLE)
+
+        quarterly_rows = upsert_dataframe(conn, quarterly_frame, QUARTERLY_TABLE, "financials")
         log_event(logger, phase="transform.quarterly", rows=quarterly_rows)
+
+        # Prices
+        conn.execute("CREATE SCHEMA IF NOT EXISTS prices")
+        prices_rows = upsert_dataframe(conn, prices_frame, "prices.daily", "prices")
+        log_event(logger, phase="transform.prices", rows=prices_rows)
+
+        # Dividends
+        conn.execute("CREATE SCHEMA IF NOT EXISTS dividends")
+        div_rows = upsert_dataframe(conn, dividends_frame, "dividends.history", "dividends")
+        log_event(logger, phase="transform.dividends", rows=div_rows)
+
+        # Splits
+        conn.execute("CREATE SCHEMA IF NOT EXISTS splits")
+        split_rows = upsert_dataframe(conn, splits_frame, "splits.history", "splits")
+        log_event(logger, phase="transform.splits", rows=split_rows)
+
+        # Company metadata (simple replace, no date-based upsert)
+        conn.execute("CREATE SCHEMA IF NOT EXISTS company")
+        if not metadata_frame.empty:
+            conn.execute("DROP TABLE IF EXISTS company.metadata")
+            conn.execute("CREATE TABLE company.metadata AS SELECT * FROM metadata_frame")
+            meta_rows = len(metadata_frame)
+        else:
+            meta_rows = 0
+        log_event(logger, phase="transform.metadata", rows=meta_rows)
+
+        # Create derived ratios table
+        ratio_rows = create_ratios_table(conn)
+        log_event(logger, phase="transform.ratios", rows=ratio_rows)
+
+        # Create growth view
+        growth_rows = create_growth_view(conn)
+        log_event(logger, phase="transform.growth_view", rows=growth_rows)
+
     finally:
         conn.close()
 
