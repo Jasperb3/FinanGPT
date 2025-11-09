@@ -10,8 +10,9 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-import yaml
 from dotenv import load_dotenv
+
+import yaml  # type: ignore
 
 
 class Config:
@@ -161,12 +162,18 @@ def load_config(config_path: Optional[str] = None) -> Config:
 
     config_file = Path(config_path)
     if config_file.exists():
-        try:
-            with config_file.open("r") as f:
-                config_dict = yaml.safe_load(f) or {}
-        except yaml.YAMLError as e:
-            print(f"Warning: Failed to parse {config_path}: {e}")
-            config_dict = {}
+        if yaml is None:
+            print(
+                "Warning: config.yaml found but PyYAML is not installed. "
+                "Install it via `pip install -r requirements.txt` to use custom configuration."
+            )
+        else:
+            try:
+                with config_file.open("r", encoding="utf-8") as f:
+                    config_dict = yaml.safe_load(f) or {}
+            except yaml.YAMLError as e:  # type: ignore[attr-defined]
+                print(f"Warning: Failed to parse {config_path}: {e}")
+                config_dict = {}
 
     # Override with environment variables if present
     if os.getenv("MONGO_URI"):

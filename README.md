@@ -81,7 +81,7 @@ An intelligent financial data pipeline that combines comprehensive data ingestio
    ```bash
    MONGO_URI=mongodb://localhost:27017/financial_data
    OLLAMA_URL=http://localhost:11434
-   MODEL_NAME=phi4:latest
+   MODEL_NAME=gpt-oss:latest
    PRICE_LOOKBACK_DAYS=365
    ```
 
@@ -92,7 +92,7 @@ An intelligent financial data pipeline that combines comprehensive data ingestio
 
    # Terminal 2: Ollama
    ollama serve
-   ollama pull phi4:latest  # or gpt-oss:latest
+   ollama pull gpt-oss:latest  # or anothewr model if preferred
    ```
 
 ### Basic Usage

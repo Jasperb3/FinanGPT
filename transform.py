@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime, date
+from datetime import UTC, datetime, date
 from numbers import Number
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence
@@ -31,7 +31,7 @@ def configure_logger() -> logging.Logger:
         return logger
     logger.setLevel(logging.INFO)
     logger.propagate = False
-    file_handler = logging.FileHandler(LOGS_DIR / f"transform_{datetime.utcnow():%Y%m%d}.log")
+    file_handler = logging.FileHandler(LOGS_DIR / f"transform_{datetime.now(UTC):%Y%m%d}.log")
     stream_handler = logging.StreamHandler()
     formatter = logging.Formatter("%(message)s")
     file_handler.setFormatter(formatter)
@@ -42,7 +42,7 @@ def configure_logger() -> logging.Logger:
 
 
 def log_event(logger: logging.Logger, **payload: Any) -> None:
-    entry = {"ts": datetime.utcnow().isoformat(), **payload}
+    entry = {"ts": datetime.now(UTC).isoformat(), **payload}
     logger.info(json.dumps(entry))
 
 
@@ -116,7 +116,7 @@ def prepare_dataframe(documents: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
     return frame
 
 
-def upsert_dataframe(conn: duckdb.DuckDBPyConnection, frame: pd.DataFrame, table: str, schema: str = None) -> int:
+def upsert_dataframe(conn: duckdb.DuckDBPyConnection, frame: pd.DataFrame, table: str, schema: str | None = None) -> int:
     if frame.empty:
         return 0
     view_name = f"staging_{table.replace('.', '_')}"
@@ -124,6 +124,7 @@ def upsert_dataframe(conn: duckdb.DuckDBPyConnection, frame: pd.DataFrame, table
         conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
     conn.register(view_name, frame)
     conn.execute(f"CREATE TABLE IF NOT EXISTS {table} AS SELECT * FROM {view_name} LIMIT 0")
+    ensure_columns(conn, table, frame)
     conn.execute(
         f"""
         DELETE FROM {table}
@@ -132,9 +133,42 @@ def upsert_dataframe(conn: duckdb.DuckDBPyConnection, frame: pd.DataFrame, table
           AND {table}.date = {view_name}.date
         """
     )
-    conn.execute(f"INSERT INTO {table} SELECT * FROM {view_name}")
+    column_list = ", ".join(f'"{col}"' for col in frame.columns)
+    conn.execute(f'INSERT INTO {table} ({column_list}) SELECT {column_list} FROM {view_name}')
     conn.unregister(view_name)
     return len(frame)
+
+
+def ensure_columns(conn: duckdb.DuckDBPyConnection, table: str, frame: pd.DataFrame) -> None:
+    """Ensure DuckDB table has all columns present in the incoming DataFrame."""
+    info = conn.execute(f"PRAGMA table_info('{table}')").fetchall()
+    if not info:
+        return
+    existing = {row[1] for row in info}
+    for column in frame.columns:
+        if column in existing:
+            continue
+        duck_type = infer_duckdb_type(frame[column], column)
+        conn.execute(f'ALTER TABLE {table} ADD COLUMN "{column}" {duck_type}')
+        existing.add(column)
+
+
+def infer_duckdb_type(series: pd.Series, column: str) -> str:
+    """Infer an appropriate DuckDB column type for a pandas Series."""
+    if column == "ticker":
+        return "VARCHAR"
+    if column == "date":
+        return "DATE"
+    dtype = series.dtype
+    if pd.api.types.is_bool_dtype(dtype):
+        return "BOOLEAN"
+    if pd.api.types.is_integer_dtype(dtype):
+        return "BIGINT"
+    if pd.api.types.is_float_dtype(dtype):
+        return "DOUBLE"
+    if pd.api.types.is_datetime64_any_dtype(dtype):
+        return "TIMESTAMP"
+    return "VARCHAR"
 
 
 def prepare_prices_dataframe(documents: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
@@ -435,8 +469,10 @@ def main() -> None:
         # Company metadata (simple replace, no date-based upsert)
         conn.execute("CREATE SCHEMA IF NOT EXISTS company")
         if not metadata_frame.empty:
+            conn.register("metadata_frame", metadata_frame)
             conn.execute("DROP TABLE IF EXISTS company.metadata")
             conn.execute("CREATE TABLE company.metadata AS SELECT * FROM metadata_frame")
+            conn.unregister("metadata_frame")
             meta_rows = len(metadata_frame)
         else:
             meta_rows = 0

@@ -120,7 +120,7 @@ def configure_logger() -> logging.Logger:
         return logger
     logger.setLevel(logging.INFO)
     logger.propagate = False
-    file_path = LOGS_DIR / f"ingest_{datetime.utcnow():%Y%m%d}.log"
+    file_path = LOGS_DIR / f"ingest_{datetime.now(UTC):%Y%m%d}.log"
     file_handler = logging.FileHandler(file_path)
     stream_handler = logging.StreamHandler(sys.stdout)
     fmt = logging.Formatter("%(message)s")
@@ -133,7 +133,7 @@ def configure_logger() -> logging.Logger:
 
 def log_event(logger: logging.Logger, **payload: Any) -> None:
     """Emit a structured JSON record."""
-    entry = {"ts": datetime.utcnow().isoformat(), **payload}
+    entry = {"ts": datetime.now(UTC).isoformat(), **payload}
     logger.info(json.dumps(entry))
 
 
@@ -307,8 +307,8 @@ def is_data_stale(
     if not last_fetched_str:
         return True
 
-    last_fetched = datetime.fromisoformat(last_fetched_str.replace("Z", "+00:00"))
-    age = datetime.utcnow() - last_fetched.replace(tzinfo=None)
+    last_fetched = datetime.fromisoformat(last_fetched_str.replace("Z", "+00:00")).astimezone(UTC)
+    age = datetime.now(UTC) - last_fetched
     return age.days >= threshold_days
 
 
@@ -557,7 +557,7 @@ def upsert_payloads(
     if not payloads:
         return 0
     operations: List[UpdateOne] = []
-    fetched_at = datetime.utcnow().isoformat()
+    fetched_at = datetime.now(UTC).isoformat()
     for date_key, payload in payloads.items():
         document = {
             "ticker": ticker,
@@ -644,7 +644,7 @@ def fetch_price_history(
         if last_date:
             # Incremental update: fetch from day after last_date until today
             start_date = (last_date + timedelta(days=1)).date()
-            end_date = datetime.utcnow().date()
+            end_date = datetime.now(UTC).date()
 
             # Don't fetch if we're already up to date
             if start_date > end_date:
@@ -722,7 +722,7 @@ def upsert_price_history(collection: Collection, ticker: str, price_df: pd.DataF
         return 0
 
     operations: List[UpdateOne] = []
-    fetched_at = datetime.utcnow().isoformat()
+    fetched_at = datetime.now(UTC).isoformat()
 
     for _, row in price_df.iterrows():
         date_val = row['date']
@@ -762,7 +762,7 @@ def upsert_dividends(collection: Collection, ticker: str, div_df: pd.DataFrame) 
         return 0
 
     operations: List[UpdateOne] = []
-    fetched_at = datetime.utcnow().isoformat()
+    fetched_at = datetime.now(UTC).isoformat()
 
     for _, row in div_df.iterrows():
         date_val = row['date']
@@ -797,7 +797,7 @@ def upsert_splits(collection: Collection, ticker: str, split_df: pd.DataFrame) -
         return 0
 
     operations: List[UpdateOne] = []
-    fetched_at = datetime.utcnow().isoformat()
+    fetched_at = datetime.now(UTC).isoformat()
 
     for _, row in split_df.iterrows():
         date_val = row['date']
@@ -831,7 +831,7 @@ def upsert_company_metadata(collection: Collection, ticker: str, metadata: Dict[
     if not metadata:
         return 0
 
-    fetched_at = datetime.utcnow().isoformat()
+    fetched_at = datetime.now(UTC).isoformat()
     document = {
         "ticker": ticker,
         "metadata": metadata,
@@ -859,7 +859,7 @@ def update_ingestion_metadata(
     document = {
         "ticker": ticker,
         "data_type": data_type,
-        "last_fetched": datetime.utcnow().isoformat(),
+        "last_fetched": datetime.now(UTC).isoformat(),
         "status": status,
         "record_count": record_count,
     }
