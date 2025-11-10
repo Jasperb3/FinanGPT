@@ -9,7 +9,8 @@ import logging
 import os
 import re
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, date
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set
 
@@ -76,6 +77,8 @@ ALLOWED_TABLES = (
     # Phase 10: Technical Analysis
     "technical.indicators",
 )
+SUMMARY_SAMPLE_LIMIT = 25
+SUMMARY_SAMPLE_LIMIT = 25
 
 
 def configure_logger() -> logging.Logger:
@@ -208,13 +211,28 @@ def introspect_schema(conn: duckdb.DuckDBPyConnection, tables: Sequence[str]) ->
 
 
 def build_system_prompt(schema: Mapping[str, Sequence[str]]) -> str:
-    from datetime import date, timedelta
-
     schema_lines = []
     for table, columns in schema.items():
         column_text = ", ".join(columns)
         schema_lines.append(f"- {table}: {column_text}")
     schema_block = "\n".join(schema_lines)
+    guidance: list[str] = []
+    ratios_columns = schema.get("ratios.financial")
+    if ratios_columns:
+        key_ratios = [col for col in ratios_columns if col not in {"ticker", "date"}]
+        if key_ratios:
+            guidance.append(
+                "Use `ratios.financial` for capital-efficiency metrics such as roe, roa, net_margin, gross_margin, "
+                "ebitda_margin, debt_ratio, asset_turnover, fcf_margin, and cash_conversion."
+            )
+    if "company.peers" in schema:
+        guidance.append("Join `company.peers` when the query references industries or peer groups (FAANG, SEMICONDUCTORS, etc.).")
+    if any(table.startswith("analyst.") for table in schema.keys()):
+        guidance.append("Only use `analyst.*` tables when the user explicitly requests analyst sentiment, targets, or forecasts.")
+    table_guidance = ""
+    if guidance:
+        guidance = [f"- {line}" for line in guidance]
+        table_guidance = "Table guidance:\n" + "\n".join(guidance) + "\n"
 
     # Date context for natural language parsing
     today = date.today()
@@ -336,12 +354,15 @@ Advanced SQL Features Allowed:
         "Prefer explicit column lists over SELECT * and keep SQL readable.",
         "Use window functions for rankings, running calculations, and peer comparisons.",
         "Reference peer groups table for comparative analysis across predefined groups.",
+        "Use ANSI interval arithmetic such as `current_date + INTERVAL '1' YEAR`; avoid `date_add` unless you pass (date, interval).",
+        "Wrap the SQL inside ```sql``` fences and do not add commentary or explanations.",
     ]
     rules_block = "\n".join(f"- {rule}" for rule in rules)
 
     return (
         "You are FinanGPT, a disciplined financial data analyst that writes safe DuckDB SQL.\n"
         f"Schema snapshot:\n{schema_block}\n\n"
+        f"{table_guidance}"
         f"{date_context}\n"
         f"{peer_groups_info}\n"
         f"{valuation_earnings_info}\n"
@@ -571,6 +592,126 @@ def pretty_print(columns: Sequence[str], rows: Sequence[Sequence[Any]]) -> None:
         print(line)
 
 
+def serialise_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        try:
+            return float(value)
+        except Exception:
+            return str(value)
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="ignore")
+    return value
+
+
+def prepare_summary_rows(columns: Sequence[str], rows: Sequence[Sequence[Any]], limit: int = SUMMARY_SAMPLE_LIMIT) -> List[Dict[str, Any]]:
+    sample = rows[:limit]
+    formatted: List[Dict[str, Any]] = []
+    for row in sample:
+        record = {}
+        for column, value in zip(columns, row):
+            record[column] = serialise_value(value)
+        formatted.append(record)
+    return formatted
+
+
+def generate_result_summary(
+    base_url: str,
+    model: str,
+    question: str,
+    sql: str,
+    columns: Sequence[str],
+    rows: Sequence[Sequence[Any]],
+    logger: logging.Logger,
+) -> Optional[str]:
+    total_rows = len(rows)
+    if total_rows == 0:
+        return (
+            f"No matching records were found for '{question}'. "
+            "Consider widening the date range or ensuring the ticker exists in the dataset."
+        )
+    sample_rows = prepare_summary_rows(columns, rows)
+    payload = {
+        "question": question,
+        "sql": sql,
+        "row_count": total_rows,
+        "columns": columns,
+        "sample_rows": sample_rows,
+    }
+    summary_system_prompt = (
+        "You are FinanGPT's reporting analyst. Craft a concise natural-language answer (<=120 words) that directly "
+        "addresses the user's finance question using the provided SQL results. Highlight the most relevant metrics, "
+        "call out notable leaders/laggards, and mention the time coverage. If the sample is partial, state that the "
+        "insights are based on the returned subset."
+    )
+    try:
+        response = call_ollama(base_url, model, summary_system_prompt, json.dumps(payload, default=str))
+        stripped = response.strip()
+        if stripped:
+            return stripped
+    except Exception as exc:
+        log_event(logger, phase="query.summary_error", error=str(exc))
+    return _fallback_summary(question, columns, rows)
+
+
+def _fallback_summary(question: str, columns: Sequence[str], rows: Sequence[Sequence[Any]]) -> str:
+    total_rows = len(rows)
+    if total_rows == 0:
+        return f"No matching rows were found for '{question}'."
+    sample = rows[0]
+    details = ", ".join(
+        f"{col}={serialise_value(val)}"
+        for col, val in zip(columns, sample)
+        if col.lower() in {"ticker", "date", "netincome", "totalrevenue", "pe_ratio", "eps_actual", "consensus_label", "upside_pct"}
+    )
+    if not details:
+        details = ", ".join(f"{col}={serialise_value(val)}" for col, val in zip(columns, sample)[:4])
+    return (
+        f"Returned {total_rows} rows. Latest row snapshot: {details}. "
+        "Review the table above for full details."
+    )
+
+
+def augment_question_with_hints(question: str) -> str:
+    hints: List[str] = []
+    lowered = question.lower()
+    if any(keyword in lowered for keyword in ("analyst", "price target", "price targets", "recommendation", "consensus")):
+        hints.append(
+            "Use `analyst.price_targets` (current_price, target_low/mean/high, upside_pct) and `analyst.consensus` "
+            "(strong_buy..strong_sell, consensus_label) filtered by the requested ticker. Limit to the next 12 months "
+            "using `WHERE date BETWEEN current_date AND current_date + INTERVAL '12' MONTH`."
+        )
+    if any(keyword in lowered for keyword in ("roe", "return on equity", "roa", "margin")):
+        hints.append(
+            "For ROE/ROA/margin questions, pull metrics from `ratios.financial` instead of analyst tables."
+        )
+    if "peer" in lowered or "similar companies" in lowered:
+        hints.append(
+            "Use `company.peers` joined to `company.metadata` or valuation tables to compare companies within the same peer_group."
+        )
+    if any(keyword in lowered for keyword in ("p/e", "pe ratio", "price-to-earnings", "valuation")):
+        hints.append(
+            "Retrieve valuation ratios (pe_ratio, pb_ratio, ps_ratio, dividend_yield, peg_ratio) from `valuation.metrics`."
+        )
+    if any(keyword in lowered for keyword in ("net income", "revenue", "fiscal year", "annual results")):
+        hints.append(
+            "For net income or revenue questions, select `netIncome` and `totalRevenue` from `financials.annual` "
+            "filtered by the specific ticker and order by date DESC LIMIT 1 to capture the latest fiscal year."
+        )
+    if any(keyword in lowered for keyword in ("eps", "earnings per share")):
+        hints.append(
+            "For EPS trends, query `earnings.history` with `eps_actual`, `report_date`, and window functions such as "
+            "LAG() over the past N quarters (`WHERE ticker = '<TICKER>' AND report_date >= current_date - INTERVAL '2' YEAR`)."
+        )
+    if not hints:
+        return question
+    helper_block = "\n".join(f"- {hint}" for hint in hints)
+    return f"{question}\n\nHelper Notes:\n{helper_block}"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Query DuckDB through an LLM→SQL layer.")
     parser.add_argument(
@@ -667,6 +808,11 @@ def main() -> None:
             else:
                 pretty_print(columns, rows)
 
+            summary_text = generate_result_summary(base_url, model, f"Template: {args.template}", sql or "", columns, rows, logger)
+            if summary_text:
+                print("\nSummary:")
+                print(summary_text.strip())
+
             log_event(logger, phase="query.template", template=args.template, rows=len(rows))
         except Exception as exc:
             log_event(logger, phase="query.template_error", template=args.template, error=str(exc))
@@ -695,12 +841,15 @@ def main() -> None:
 
     try:
         # Try to call Ollama
+        hinted_question = augment_question_with_hints(question)
+        hinted_question = augment_question_with_hints(question)
         try:
-            response_text = call_ollama(base_url, model, system_prompt, question)
+            response_text = call_ollama(base_url, model, system_prompt, hinted_question)
             sql = extract_sql(response_text)
 
             if args.debug and RESILIENCE_AVAILABLE:
-                print(f"\n[DEBUG] LLM Response:\n{response_text}\n")
+                print(f"\n[DEBUG] Hint-augmented question:\n{hinted_question}\n")
+                print(f"[DEBUG] LLM Response:\n{response_text}\n")
                 print(f"[DEBUG] Extracted SQL:\n{sql}\n")
 
         except requests.ConnectionError as conn_err:
@@ -762,6 +911,11 @@ def main() -> None:
             pretty_print_formatted(columns, rows, use_formatting=True)
         else:
             pretty_print(columns, rows)
+
+        summary_text = generate_result_summary(base_url, model, question, sanitised_sql, columns, rows, logger)
+        if summary_text:
+            print("\nSummary:")
+            print(summary_text.strip())
 
         # Create visualization if enabled and available
         if VISUALIZATION_AVAILABLE and not args.no_chart and rows:

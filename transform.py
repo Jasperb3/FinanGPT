@@ -116,7 +116,13 @@ def prepare_dataframe(documents: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
     return frame
 
 
-def upsert_dataframe(conn: duckdb.DuckDBPyConnection, frame: pd.DataFrame, table: str, schema: str | None = None) -> int:
+def upsert_dataframe(
+    conn: duckdb.DuckDBPyConnection,
+    frame: pd.DataFrame,
+    table: str,
+    schema: str | None = None,
+    key_columns: Sequence[str] | None = None,
+) -> int:
     if frame.empty:
         return 0
     view_name = f"staging_{table.replace('.', '_')}"
@@ -125,12 +131,19 @@ def upsert_dataframe(conn: duckdb.DuckDBPyConnection, frame: pd.DataFrame, table
     conn.register(view_name, frame)
     conn.execute(f"CREATE TABLE IF NOT EXISTS {table} AS SELECT * FROM {view_name} LIMIT 0")
     ensure_columns(conn, table, frame)
+    key_columns = key_columns or ["ticker", "date"]
+    missing_keys = [col for col in key_columns if col not in frame.columns]
+    if missing_keys:
+        raise ValueError(f"{table} is missing key columns required for upsert: {missing_keys}")
+    key_conditions = " AND ".join(
+        f'{table}."{col}" = {view_name}."{col}"'
+        for col in key_columns
+    )
     conn.execute(
         f"""
         DELETE FROM {table}
         USING {view_name}
-        WHERE {table}.ticker = {view_name}.ticker
-          AND {table}.date = {view_name}.date
+        WHERE {key_conditions}
         """
     )
     column_list = ", ".join(f'"{col}"' for col in frame.columns)
@@ -691,7 +704,13 @@ def main() -> None:
         conn.execute("CREATE SCHEMA IF NOT EXISTS earnings")
         if not earnings_history_frame.empty:
             # Use date-based upsert for earnings history
-            earnings_hist_rows = upsert_dataframe(conn, earnings_history_frame, "earnings.history_raw", "earnings")
+            earnings_hist_rows = upsert_dataframe(
+                conn,
+                earnings_history_frame,
+                "earnings.history_raw",
+                "earnings",
+                key_columns=["ticker", "report_date", "fiscal_period"],
+            )
         else:
             conn.execute("CREATE TABLE IF NOT EXISTS earnings.history_raw (ticker VARCHAR, report_date DATE, fiscal_period VARCHAR, eps_estimate DOUBLE, eps_actual DOUBLE, eps_surprise DOUBLE, surprise_pct DOUBLE, revenue_estimate DOUBLE, revenue_actual DOUBLE)")
             earnings_hist_rows = 0
@@ -747,7 +766,7 @@ def main() -> None:
         # Phase 9: Growth estimates
         if not growth_estimates_frame.empty:
             conn.register("growth_estimates_frame", growth_estimates_frame)
-            conn.execute("DROP TABLE IF NOT EXISTS analyst.growth_estimates_raw")
+            conn.execute("DROP TABLE IF EXISTS analyst.growth_estimates_raw")
             conn.execute("CREATE TABLE analyst.growth_estimates_raw AS SELECT * FROM growth_estimates_frame")
             conn.unregister("growth_estimates_frame")
             growth_estimates_rows = len(growth_estimates_frame)
