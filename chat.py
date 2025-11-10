@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -24,7 +25,9 @@ from query import (
     ALLOWED_TABLES,
     DEFAULT_STALENESS_THRESHOLD_DAYS,
     build_system_prompt,
+    call_ollama_with_retry,
     check_data_freshness,
+    check_ollama_health,
     extract_sql,
     extract_tickers_from_sql,
     introspect_schema,
@@ -132,6 +135,31 @@ def call_ollama_chat(
     return content
 
 
+def call_ollama_chat_with_retry(
+    base_url: str,
+    model: str,
+    messages: List[Dict[str, str]],
+    max_retries: int = 3,
+    backoff: list = None,
+    timeout: int = 60
+) -> str:
+    """Call Ollama chat API with exponential backoff on transient failures."""
+    if backoff is None:
+        backoff = [1, 2, 4]
+
+    logger = logging.getLogger("chat")
+
+    for attempt, delay in enumerate(backoff[:max_retries], start=1):
+        try:
+            return call_ollama_chat(base_url, model, messages, timeout)
+        except (requests.ConnectionError, requests.Timeout) as e:
+            if attempt == max_retries:
+                raise
+            logger.warning(f"Ollama call failed (attempt {attempt}/{max_retries}), "
+                          f"retrying in {delay}s: {e}")
+            time.sleep(delay)
+
+
 def print_welcome_message(schema: Mapping[str, Sequence[str]]) -> None:
     """Display welcome message with available data and example queries."""
     print("\n" + "=" * 70)
@@ -219,7 +247,7 @@ def execute_query_with_retry(
         try:
             # Call LLM with graceful degradation
             try:
-                response_text = call_ollama_chat(base_url, model, conversation_history)
+                response_text = call_ollama_chat_with_retry(base_url, model, conversation_history)
             except requests.ConnectionError as conn_err:
                 # Graceful degradation when Ollama is down
                 if RESILIENCE_AVAILABLE and attempt == 0:  # Only on first attempt
@@ -522,6 +550,13 @@ def main() -> None:
     mongo_db = None
     if mongo_uri and not args.skip_freshness_check:
         mongo_db = load_mongo_database(mongo_uri)
+
+    # Check Ollama health before starting chat loop
+    if not check_ollama_health(base_url):
+        print("⚠️  Warning: Ollama service health check failed.")
+        print("   The service may be unreachable. Will attempt connection with retries.")
+        print("   If issues persist, check that Ollama is running at:", base_url)
+        print()
 
     try:
         run_chat_loop(

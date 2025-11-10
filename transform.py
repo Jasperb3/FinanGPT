@@ -19,6 +19,15 @@ from pymongo.collection import Collection
 from pymongo.database import Database
 
 from time_utils import parse_utc_timestamp
+from config_loader import load_config
+
+# Import streaming transformation module
+try:
+    from src.transform.streaming import transform_with_streaming
+    STREAMING_AVAILABLE = True
+except ImportError:
+    STREAMING_AVAILABLE = False
+
 LOGS_DIR = Path("logs")
 DUCKDB_PATH = "financial_data.duckdb"
 ANNUAL_TABLE = "financials.annual"

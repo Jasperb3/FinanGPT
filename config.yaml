@@ -17,6 +17,7 @@ ollama:
 
 ingestion:
   # Performance settings
+  use_concurrent: true         # Enable parallel ticker processing (10x speedup)
   max_workers: 10              # Concurrent ingestion workers (1-20 recommended)
   worker_timeout: 120          # Timeout per ticker in seconds
   max_tickers_per_batch: 500   # INCREASED from 50 (with concurrent processing)

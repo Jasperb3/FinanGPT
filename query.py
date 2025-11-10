@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import sys
+import time
 from datetime import UTC, datetime, timedelta, date
 from decimal import Decimal
 from pathlib import Path
@@ -49,10 +50,33 @@ try:
 except ImportError:
     RESILIENCE_AVAILABLE = False
 
+# Import query caching module
+try:
+    from src.query.cache import QueryCache
+    from config_loader import load_config
+    CACHE_AVAILABLE = True
+except ImportError:
+    CACHE_AVAILABLE = False
+
 LOGS_DIR = Path("logs")
 DEFAULT_LIMIT = 25
 MAX_LIMIT = 100
 DEFAULT_STALENESS_THRESHOLD_DAYS = 7
+
+# Global cache instance
+_query_cache = None
+
+def get_query_cache(config):
+    """Get or create query cache instance based on configuration."""
+    global _query_cache
+    if _query_cache is None and CACHE_AVAILABLE:
+        cache_enabled = config.get('query', {}).get('cache_enabled', False)
+        if cache_enabled:
+            ttl = config.get('query', {}).get('cache_ttl_seconds', 300)
+            max_entries = config.get('query', {}).get('cache_max_entries', 100)
+            _query_cache = QueryCache(ttl_seconds=ttl, max_entries=max_entries)
+    return _query_cache
+
 ALLOWED_TABLES = (
     "financials.annual",
     "financials.quarterly",
@@ -374,6 +398,15 @@ Advanced SQL Features Allowed:
     )
 
 
+def check_ollama_health(base_url: str, timeout: int = 5) -> bool:
+    """Check if Ollama service is reachable."""
+    try:
+        response = requests.get(f"{base_url}/api/tags", timeout=timeout)
+        return response.status_code == 200
+    except (requests.ConnectionError, requests.Timeout):
+        return False
+
+
 def call_ollama(
     base_url: str,
     model: str,
@@ -401,6 +434,32 @@ def call_ollama(
     if not content:
         raise ValueError("Ollama returned an empty response.")
     return content
+
+
+def call_ollama_with_retry(
+    base_url: str,
+    model: str,
+    system_prompt: str,
+    user_query: str,
+    max_retries: int = 3,
+    backoff: list = None,
+    timeout: int = 60
+) -> str:
+    """Call Ollama with exponential backoff on transient failures."""
+    if backoff is None:
+        backoff = [1, 2, 4]
+
+    logger = logging.getLogger("query")
+
+    for attempt, delay in enumerate(backoff[:max_retries], start=1):
+        try:
+            return call_ollama(base_url, model, system_prompt, user_query, timeout)
+        except (requests.ConnectionError, requests.Timeout) as e:
+            if attempt == max_retries:
+                raise
+            logger.warning(f"Ollama call failed (attempt {attempt}/{max_retries}), "
+                          f"retrying in {delay}s: {e}")
+            time.sleep(delay)
 
 
 def extract_sql(text: str) -> str:
@@ -840,11 +899,24 @@ def main() -> None:
         mongo_db = load_mongo_database(mongo_uri)
 
     try:
-        # Try to call Ollama
-        hinted_question = augment_question_with_hints(question)
+        # Check Ollama health before attempting
+        if not check_ollama_health(base_url):
+            logger.warning("Ollama health check failed, attempting graceful degradation")
+            if RESILIENCE_AVAILABLE:
+                # Try graceful degradation
+                conn_err = requests.ConnectionError("Ollama health check failed")
+                sql = handle_ollama_failure(conn_err)
+                if not sql:
+                    conn.close()
+                    raise SystemExit("Ollama service is not available and no fallback template matched.")
+            else:
+                conn.close()
+                raise SystemExit("Ollama service is not available.")
+
+        # Try to call Ollama with retry logic
         hinted_question = augment_question_with_hints(question)
         try:
-            response_text = call_ollama(base_url, model, system_prompt, hinted_question)
+            response_text = call_ollama_with_retry(base_url, model, system_prompt, hinted_question)
             sql = extract_sql(response_text)
 
             if args.debug and RESILIENCE_AVAILABLE:
@@ -886,13 +958,43 @@ def main() -> None:
                     if user_input not in ("y", "yes"):
                         raise SystemExit("Query cancelled. Please refresh data and try again.")
 
+        # Try to load config for cache
+        config = {}
+        if CACHE_AVAILABLE:
+            try:
+                config = load_config()
+            except:
+                pass
+
+        # Check cache first
+        cache = get_query_cache(config)
+        cached_df = None
+        if cache:
+            cached_df = cache.get(sanitised_sql)
+
         # Execute query with timing
-        import time
         start_time = time.time()
-        result = conn.execute(sanitised_sql)
-        columns = [desc[0] for desc in result.description]
-        rows = result.fetchall()
-        query_time = time.time() - start_time
+
+        if cached_df is not None:
+            # Cache hit - convert DataFrame back to columns and rows
+            columns = list(cached_df.columns)
+            rows = [tuple(row) for row in cached_df.itertuples(index=False, name=None)]
+            query_time = time.time() - start_time
+            if args.debug:
+                print("🚀 Cache hit! Query returned instantly from cache.")
+        else:
+            # Cache miss - execute query
+            result = conn.execute(sanitised_sql)
+            columns = [desc[0] for desc in result.description]
+            rows = result.fetchall()
+            query_time = time.time() - start_time
+
+            # Cache the result
+            if cache and rows:
+                df = pd.DataFrame(rows, columns=columns)
+                cache.set(sanitised_sql, df)
+                if args.debug:
+                    print("💾 Query result cached for future use.")
 
         # Print debug info if enabled
         if args.debug and RESILIENCE_AVAILABLE:
