@@ -13,7 +13,12 @@ ollama:
   model: gpt-oss:latest
   timeout: 60
   max_retries: 3
-  temperature: 0.1             # NEW: Low temp for consistent SQL generation
+  temperature: 0.1             # Low temp for consistent SQL generation
+
+  # Phase 2: Ollama reliability improvements
+  rate_limit_requests: 10      # Max requests per window
+  rate_limit_window: 60        # Rate limit window in seconds
+  max_context_tokens: 4000     # Maximum context window tokens
 
 ingestion:
   # Performance settings

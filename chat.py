@@ -73,6 +73,72 @@ LOGS_DIR = Path("logs")
 MAX_RETRIES = 3
 MAX_HISTORY_LENGTH = 20  # Limit conversation history to avoid token overflow
 
+
+# ============================================================================
+# Context Window Management
+# ============================================================================
+
+def estimate_tokens(text: str) -> int:
+    """Rough token estimation (1 token ≈ 4 chars)."""
+    return len(text) // 4
+
+
+def trim_conversation_history(
+    messages: List[Dict[str, str]],
+    max_tokens: int = 4000,
+    preserve_recent: int = 5
+) -> List[Dict[str, str]]:
+    """
+    Trim conversation history to fit context window.
+
+    Args:
+        messages: Conversation history
+        max_tokens: Maximum tokens to keep (default: 4000)
+        preserve_recent: Always keep last N messages (default: 5)
+
+    Returns:
+        Trimmed conversation history
+    """
+    if len(messages) <= preserve_recent:
+        return messages
+
+    # Always keep system message (first) and recent messages
+    system_msg = messages[0] if messages and messages[0]['role'] == 'system' else None
+    start_idx = 1 if system_msg else 0
+
+    # Split into middle and recent
+    if len(messages) > preserve_recent + start_idx:
+        middle_msgs = messages[start_idx:-preserve_recent]
+        recent_msgs = messages[-preserve_recent:]
+    else:
+        middle_msgs = []
+        recent_msgs = messages[start_idx:]
+
+    # Calculate tokens
+    system_tokens = estimate_tokens(system_msg['content']) if system_msg else 0
+    recent_tokens = sum(estimate_tokens(m['content']) for m in recent_msgs)
+
+    available_tokens = max_tokens - system_tokens - recent_tokens
+
+    # Add middle messages until we hit limit
+    included_middle = []
+    for msg in reversed(middle_msgs):
+        msg_tokens = estimate_tokens(msg['content'])
+        if msg_tokens > available_tokens:
+            break
+        included_middle.insert(0, msg)
+        available_tokens -= msg_tokens
+
+    # Rebuild message list
+    result = []
+    if system_msg:
+        result.append(system_msg)
+    result.extend(included_middle)
+    result.extend(recent_msgs)
+
+    return result
+
+
 EXAMPLE_QUERIES = [
     "Show AAPL revenue for the last 5 years",
     "Compare AAPL and MSFT profit margins over time",
@@ -245,9 +311,12 @@ def execute_query_with_retry(
     """
     for attempt in range(MAX_RETRIES):
         try:
+            # Trim conversation history to fit context window
+            trimmed_history = trim_conversation_history(conversation_history, max_tokens=4000)
+
             # Call LLM with graceful degradation
             try:
-                response_text = call_ollama_chat_with_retry(base_url, model, conversation_history)
+                response_text = call_ollama_chat_with_retry(base_url, model, trimmed_history)
             except requests.ConnectionError as conn_err:
                 # Graceful degradation when Ollama is down
                 if RESILIENCE_AVAILABLE and attempt == 0:  # Only on first attempt

@@ -24,6 +24,97 @@ from pymongo.database import Database
 
 from time_utils import parse_utc_timestamp
 
+# ============================================================================
+# Exception Hierarchy
+# ============================================================================
+
+class OllamaError(Exception):
+    """Base exception for Ollama interactions."""
+    pass
+
+
+class OllamaConnectionError(OllamaError):
+    """Ollama service unreachable."""
+    pass
+
+
+class OllamaTimeoutError(OllamaError):
+    """Ollama request timed out."""
+    pass
+
+
+class OllamaResponseError(OllamaError):
+    """Ollama returned invalid response."""
+    pass
+
+
+class SQLExtractionError(OllamaError):
+    """Could not extract SQL from LLM response."""
+    pass
+
+
+class SemanticValidationError(Exception):
+    """SQL doesn't semantically match the question."""
+    pass
+
+# ============================================================================
+# Rate Limiting
+# ============================================================================
+
+import threading
+from collections import deque
+
+
+class RateLimiter:
+    """Token bucket rate limiter for Ollama requests."""
+
+    def __init__(self, max_requests: int = 10, window_seconds: int = 60):
+        self.max_requests = max_requests
+        self.window = window_seconds
+        self.requests = deque()
+        self.lock = threading.Lock()
+
+    def acquire(self, block: bool = True) -> bool:
+        """Acquire permission to make a request."""
+        with self.lock:
+            now = time.time()
+
+            # Remove expired requests
+            while self.requests and self.requests[0] < now - self.window:
+                self.requests.popleft()
+
+            # Check if we can proceed
+            if len(self.requests) < self.max_requests:
+                self.requests.append(now)
+                return True
+
+            if not block:
+                return False
+
+            # Block until slot available
+            sleep_time = self.requests[0] + self.window - now
+            if sleep_time > 0:
+                logger = logging.getLogger("query")
+                logger.info(f"Rate limit reached, waiting {sleep_time:.1f}s")
+                time.sleep(sleep_time)
+                return self.acquire(block=True)
+
+            return True
+
+
+# Global rate limiter instance
+_ollama_rate_limiter = None
+
+
+def get_rate_limiter(config):
+    """Get or create rate limiter instance based on configuration."""
+    global _ollama_rate_limiter
+    if _ollama_rate_limiter is None:
+        max_requests = config.get('ollama', {}).get('rate_limit_requests', 10)
+        window_seconds = config.get('ollama', {}).get('rate_limit_window', 60)
+        _ollama_rate_limiter = RateLimiter(max_requests, window_seconds)
+    return _ollama_rate_limiter
+
 # Import visualization functions (optional - only used if available)
 try:
     from visualize import (
@@ -76,6 +167,39 @@ def get_query_cache(config):
             max_entries = config.get('query', {}).get('cache_max_entries', 100)
             _query_cache = QueryCache(ttl_seconds=ttl, max_entries=max_entries)
     return _query_cache
+
+
+# Schema caching with refresh detection
+import hashlib
+
+_schema_cache = None
+_schema_hash = None
+
+
+def get_schema_hash(schema: Mapping[str, Sequence[str]]) -> str:
+    """Generate hash of current DuckDB schema."""
+    schema_str = json.dumps({k: list(v) for k, v in schema.items()}, sort_keys=True)
+    return hashlib.sha256(schema_str.encode()).hexdigest()
+
+
+def get_cached_schema(conn, allowed_tables, force_refresh: bool = False) -> Mapping[str, Sequence[str]]:
+    """Get schema with automatic refresh detection."""
+    global _schema_cache, _schema_hash
+
+    # Introspect current schema
+    current_schema = introspect_schema(conn, allowed_tables)
+    current_hash = get_schema_hash(current_schema)
+
+    # Refresh if hash changed or forced
+    if force_refresh or _schema_hash != current_hash:
+        if _schema_hash and _schema_hash != current_hash:
+            logger = logging.getLogger("query")
+            logger.info("Schema changed, refreshing cache...")
+        _schema_cache = current_schema
+        _schema_hash = current_hash
+
+    return _schema_cache if _schema_cache else current_schema
+
 
 ALLOWED_TABLES = (
     "financials.annual",
@@ -414,6 +538,7 @@ def call_ollama(
     user_query: str,
     timeout: int = 60,
 ) -> str:
+    """Call Ollama API with comprehensive error handling."""
     payload = {
         "model": model,
         "messages": [
@@ -422,18 +547,36 @@ def call_ollama(
         ],
         "stream": False,
     }
-    response = requests.post(
-        f"{base_url}/api/chat",
-        json=payload,
-        timeout=timeout,
-    )
-    response.raise_for_status()
-    data = response.json()
-    message = data.get("message") or {}
-    content = message.get("content")
-    if not content:
-        raise ValueError("Ollama returned an empty response.")
-    return content
+
+    try:
+        response = requests.post(
+            f"{base_url}/api/chat",
+            json=payload,
+            timeout=timeout,
+        )
+        response.raise_for_status()
+
+        # Validate response structure
+        data = response.json()
+        if not data.get("message"):
+            raise OllamaResponseError("Missing 'message' field in response")
+
+        message = data.get("message") or {}
+        content = message.get("content")
+
+        if not content or not content.strip():
+            raise OllamaResponseError("Empty content in response")
+
+        return content
+
+    except requests.ConnectionError as e:
+        raise OllamaConnectionError(f"Cannot reach Ollama at {base_url}: {e}") from e
+    except requests.Timeout as e:
+        raise OllamaTimeoutError(f"Ollama timeout after {timeout}s: {e}") from e
+    except requests.HTTPError as e:
+        raise OllamaResponseError(f"Ollama HTTP error: {e}") from e
+    except (KeyError, ValueError, json.JSONDecodeError) as e:
+        raise OllamaResponseError(f"Malformed Ollama response: {e}") from e
 
 
 def call_ollama_with_retry(
@@ -454,24 +597,103 @@ def call_ollama_with_retry(
     for attempt, delay in enumerate(backoff[:max_retries], start=1):
         try:
             return call_ollama(base_url, model, system_prompt, user_query, timeout)
-        except (requests.ConnectionError, requests.Timeout) as e:
+        except (OllamaConnectionError, OllamaTimeoutError) as e:
             if attempt == max_retries:
                 raise
             logger.warning(f"Ollama call failed (attempt {attempt}/{max_retries}), "
                           f"retrying in {delay}s: {e}")
             time.sleep(delay)
+        except OllamaResponseError:
+            # Non-retriable errors - fail immediately
+            raise
 
 
 def extract_sql(text: str) -> str:
-    if not text:
-        raise ValueError("LLM response is empty.")
+    """Extract SQL from LLM response with multiple fallback strategies."""
+    if not text or not text.strip():
+        raise SQLExtractionError("LLM response is empty")
+
+    # Strategy 1: Code block with sql marker
     code_block = re.search(r"```sql\s*(.*?)```", text, re.IGNORECASE | re.DOTALL)
     if code_block:
-        return code_block.group(1).strip()
-    select_match = re.search(r"(select\b.*)", text, re.IGNORECASE | re.DOTALL)
-    if not select_match:
-        raise ValueError("Could not locate SQL in the LLM response.")
-    return select_match.group(1).strip()
+        sql = code_block.group(1).strip()
+        if sql:
+            return sql
+
+    # Strategy 2: Generic code block
+    code_block = re.search(r"```\s*(SELECT\b.*?)```", text, re.IGNORECASE | re.DOTALL)
+    if code_block:
+        sql = code_block.group(1).strip()
+        if sql:
+            return sql
+
+    # Strategy 3: SELECT statement anywhere in text
+    select_match = re.search(r"(SELECT\b.*?)(?:\n\n|$)", text, re.IGNORECASE | re.DOTALL)
+    if select_match:
+        sql = select_match.group(1).strip()
+        if sql:
+            return sql
+
+    # Strategy 4: Look for WITH clause (CTE)
+    with_match = re.search(r"(WITH\b.*?SELECT\b.*?)(?:\n\n|$)", text, re.IGNORECASE | re.DOTALL)
+    if with_match:
+        sql = with_match.group(1).strip()
+        if sql:
+            return sql
+
+    # All strategies failed
+    raise SQLExtractionError(
+        f"Could not extract SQL from LLM response. "
+        f"Response preview: {text[:200]}..."
+    )
+
+
+def validate_sql_semantics(sql: str, question: str) -> tuple[bool, str]:
+    """
+    Semantic validation: Does the SQL answer the question?
+
+    Returns: (is_valid, reason)
+    """
+    sql_lower = sql.lower()
+    question_lower = question.lower()
+
+    # Check 1: Aggregation mismatch
+    if any(word in question_lower for word in ['average', 'mean', 'avg']):
+        if 'avg(' not in sql_lower:
+            return False, "Question asks for average but SQL doesn't use AVG()"
+
+    if any(word in question_lower for word in ['total', 'sum']):
+        if 'sum(' not in sql_lower and 'count(' not in sql_lower:
+            return False, "Question asks for total/sum but SQL doesn't aggregate"
+
+    # Check 2: Time range mismatch
+    if any(word in question_lower for word in ['last', 'recent', 'latest']):
+        if 'order by' not in sql_lower or 'desc' not in sql_lower:
+            return False, "Question asks for latest but SQL doesn't order DESC"
+
+    # Check 3: Comparison mismatch
+    if 'compare' in question_lower or ' vs ' in question_lower or ' versus ' in question_lower:
+        # Should have multiple tickers or entities
+        ticker_mentions = sql_lower.count('ticker')
+        if ticker_mentions < 2 and 'in (' not in sql_lower:
+            return False, "Question asks for comparison but SQL only queries one entity"
+
+    # Check 4: Ranking mismatch
+    if any(word in question_lower for word in ['top', 'highest', 'best', 'rank']):
+        if 'order by' not in sql_lower or 'limit' not in sql_lower:
+            return False, "Question asks for top/ranking but SQL doesn't order or limit"
+
+    # Check 5: Count mismatch
+    if any(word in question_lower for word in ['how many', 'count', 'number of']):
+        if 'count(' not in sql_lower:
+            return False, "Question asks for count but SQL doesn't use COUNT()"
+
+    # Check 6: Growth/change mismatch
+    if any(word in question_lower for word in ['growth', 'change', 'increase', 'decrease']):
+        if 'lag(' not in sql_lower and 'lead(' not in sql_lower and 'yoy' not in sql_lower:
+            return False, "Question asks for growth/change but SQL doesn't calculate it"
+
+    return True, "OK"
 
 
 def validate_sql(
