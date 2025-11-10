@@ -45,7 +45,13 @@ An enterprise-grade financial intelligence platform that combines comprehensive 
 - **100% test coverage**: 45/45 tests passing across 10 test suites
 - **Enterprise safety**: SQL guardrails, table allow-lists, read-only queries, LIMIT enforcement
 - **Graceful degradation**: Fallback options when services unavailable
-- **Ollama reliability**: Health checks, exponential backoff retry logic (3 attempts: 1s, 2s, 4s delays)
+- **Ollama reliability** (NEW Phase 2):
+  - Comprehensive exception hierarchy (5 custom error types)
+  - Improved SQL extraction with 4 fallback strategies
+  - Semantic SQL validation (6 mismatch checks)
+  - Context window management (4000 token limit with smart trimming)
+  - Rate limiting protection (configurable request throttling)
+  - Schema refresh detection (automatic cache invalidation)
 - **Production hardening**: Duplicate code fixes, optimized imports, enhanced error handling
 
 ---

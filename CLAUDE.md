@@ -1,17 +1,17 @@
 # CLAUDE.md
 
 **Project**: FinanGPT - AI-Powered Financial Data Analysis Platform
-**Status**: Production-ready (Phase 11 + Enhancement Plan 4 Phases 0-1)
-**Version**: 2.5 (Updated 2025-11-10)
+**Status**: Production-ready (Phase 11 + Enhancement Plan 4 Phases 0-2)
+**Version**: 2.6 (Updated 2025-11-10)
 
 ## Quick Reference
 
 **Tech Stack**: Python 3.x | MongoDB | DuckDB | Ollama (LLM) | yfinance | SQLite
-**Lines of Code**: ~8,500 Python | 20 core modules
+**Lines of Code**: ~8,700 Python | 20 core modules
 **Data**: Global markets (12+ currencies, auto-normalized to USD) + US equities
-**Latest**: Phase 11 + Enhancement Plan 4 (Production Hardening & Performance Integration)
+**Latest**: Phase 11 + Enhancement Plan 4 (Production Hardening, Performance & Ollama Reliability)
 
-### Enhancement Plan 4 - Phases 0-1 (NEW)
+### Enhancement Plan 4 - Phases 0-2 (NEW)
 
 **Phase 0: Emergency Fixes** ✅
 - Fixed duplicate hint augmentation bug in `query.py:844-845`
@@ -24,6 +24,14 @@
 - Added `use_concurrent: true` flag in `config.yaml` for parallel ticker processing
 - Added `cache_enabled: true` flag for LRU cache with TTL (300s default)
 
+**Phase 2: Ollama Reliability Improvements** ✅
+- **Exception hierarchy**: 5 custom exception types (`OllamaError`, `OllamaConnectionError`, `OllamaTimeoutError`, `OllamaResponseError`, `SQLExtractionError`)
+- **Improved SQL extraction**: 4 fallback strategies (sql code block → generic code block → SELECT anywhere → WITH clause)
+- **Semantic SQL validation**: 6 mismatch checks (aggregation, time range, comparison, ranking, count, growth/change)
+- **Context window management**: Token estimation and smart trimming (4000 token limit, preserves recent 5 messages)
+- **Rate limiting**: Token bucket algorithm with configurable limits (10 req/60s default)
+- **Schema refresh detection**: Automatic cache invalidation on schema changes via SHA-256 hashing
+
 **Configuration** (`config.yaml`):
 ```yaml
 ingestion:
@@ -35,6 +43,11 @@ query:
   cache_enabled: true       # Enable 1000x faster repeated queries
   cache_ttl_seconds: 300
   cache_max_entries: 100
+
+ollama:
+  rate_limit_requests: 10   # NEW Phase 2: Rate limiting
+  rate_limit_window: 60
+  max_context_tokens: 4000  # NEW Phase 2: Context window management
 ```
 
 ### Core Workflows
