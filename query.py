@@ -55,7 +55,7 @@ def sanitize_ticker(ticker: str) -> str:
     return ticker.upper()
 
 
-def sanitize_tickers_input(tickers_str: str) -> list:
+def sanitize_tickers_input(tickers_str: str) -> List[str]:
     """
     Sanitize comma-separated tickers string.
 
@@ -76,7 +76,7 @@ def sanitize_tickers_input(tickers_str: str) -> list:
 # Security: Path Traversal Prevention
 # ============================================================================
 
-def validate_file_path(file_path: str, allowed_dirs: list = None) -> Path:
+def validate_file_path(file_path: str, allowed_dirs: Optional[List[str]] = None) -> Path:
     """
     Validate file path to prevent path traversal attacks.
 
@@ -116,7 +116,7 @@ def validate_file_path(file_path: str, allowed_dirs: list = None) -> Path:
     return path
 
 
-def safe_read_file(file_path: str, allowed_dirs: list = None) -> str:
+def safe_read_file(file_path: str, allowed_dirs: Optional[List[str]] = None) -> str:
     """
     Safely read file contents with path validation.
 
@@ -179,7 +179,7 @@ def sanitize_error_message(error: Exception, debug_mode: bool = False) -> str:
     return generic_messages.get(error_type, "An error occurred. Please try again or contact support.")
 
 
-def safe_error_response(error: Exception, debug_mode: bool = False) -> dict:
+def safe_error_response(error: Exception, debug_mode: bool = False) -> Dict[str, Any]:
     """
     Create a safe error response dictionary.
 
@@ -351,7 +351,7 @@ class RateLimiter:
 _ollama_rate_limiter = None
 
 
-def get_rate_limiter(config):
+def get_rate_limiter(config: Dict[str, Any]) -> RateLimiter:
     """Get or create rate limiter instance based on configuration."""
     global _ollama_rate_limiter
     if _ollama_rate_limiter is None:
@@ -402,7 +402,7 @@ DEFAULT_STALENESS_THRESHOLD_DAYS = 7
 # Global cache instance
 _query_cache = None
 
-def get_query_cache(config):
+def get_query_cache(config: Dict[str, Any]) -> Optional['QueryCache']:
     """Get or create query cache instance based on configuration."""
     global _query_cache
     if _query_cache is None and CACHE_AVAILABLE:
@@ -427,7 +427,7 @@ def get_schema_hash(schema: Mapping[str, Sequence[str]]) -> str:
     return hashlib.sha256(schema_str.encode()).hexdigest()
 
 
-def get_cached_schema(conn, allowed_tables, force_refresh: bool = False) -> Mapping[str, Sequence[str]]:
+def get_cached_schema(conn: duckdb.DuckDBPyConnection, allowed_tables: Sequence[str], force_refresh: bool = False) -> Mapping[str, Sequence[str]]:
     """Get schema with automatic refresh detection."""
     global _schema_cache, _schema_hash
 
@@ -830,7 +830,7 @@ def call_ollama_with_retry(
     system_prompt: str,
     user_query: str,
     max_retries: int = 3,
-    backoff: list = None,
+    backoff: Optional[List[int]] = None,
     timeout: int = 60
 ) -> str:
     """Call Ollama with exponential backoff on transient failures."""
