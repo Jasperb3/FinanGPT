@@ -312,7 +312,17 @@ def execute_query_with_retry(
             # Provide feedback to LLM for retry
             print(f"☢\u2005 Attempt {attempt + 1} failed, retrying...")
             if error_handler:
-                feedback = error_handler.get_feedback(sql, error_msg, user_query)
+                # Use enhance_error to get helpful feedback
+                enhanced_msg = error_handler.enhance_error(
+                    Exception(error_msg),
+                    user_query,
+                    sql
+                )
+                feedback = (
+                    f"The previous SQL query failed.\n"
+                    f"Error details: {enhanced_msg}\n"
+                    f"Please revise the query to fix this issue."
+                )
             else:
                 feedback = (
                     f"The previous SQL query failed with error: {error_msg}\n"

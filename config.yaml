@@ -10,7 +10,7 @@ database:
 
 ollama:
   url: http://localhost:11434
-  model: gpt-oss:latest
+  model: kimi-k2-thinking:cloud
   timeout: 60
   max_retries: 3
   temperature: 0.1             # Low temp for consistent SQL generation

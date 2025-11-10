@@ -10,4 +10,4 @@ tickers.csv
 charts/
 archive/
 reference/
-*db
+query_history.db
