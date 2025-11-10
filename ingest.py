@@ -28,6 +28,14 @@ from pymongo.database import Database
 from pymongo.errors import PyMongoError
 
 from time_utils import parse_utc_timestamp
+from config_loader import load_config
+
+# Import concurrent ingestion module
+try:
+    from src.ingest.concurrent import ingest_batch_concurrent, print_ingestion_summary
+    CONCURRENT_AVAILABLE = True
+except ImportError:
+    CONCURRENT_AVAILABLE = False
 
 MAX_TICKERS_PER_RUN = 50
 MAX_ATTEMPTS = 3
@@ -1439,15 +1447,56 @@ def main() -> None:
             "analyst_consensus": analyst_consensus_collection,  # Phase 9
             "growth_estimates": growth_estimates_collection,  # Phase 9
         }
-        for ticker in tickers:
-            ingest_symbol(
-                ticker,
-                collections,
-                logger,
+
+        # Load configuration for concurrent processing
+        config = load_config()
+        use_concurrent = config.get('ingestion', {}).get('use_concurrent', False)
+
+        if use_concurrent and CONCURRENT_AVAILABLE and len(tickers) > 1:
+            # Use concurrent processing for better performance
+            max_workers = config.get('ingestion', {}).get('max_workers', 10)
+            worker_timeout = config.get('ingestion', {}).get('worker_timeout', 120)
+
+            log_event(logger, phase="concurrent.start",
+                     tickers_count=len(tickers), max_workers=max_workers,
+                     message=f"Starting concurrent ingestion with {max_workers} workers")
+
+            # Wrapper function to match concurrent module's expected signature
+            def ingest_func(ticker, **kwargs):
+                ingest_symbol(ticker, collections, **kwargs)
+                return 1  # Return success indicator
+
+            results = ingest_batch_concurrent(
+                tickers=tickers,
+                ingest_func=ingest_func,
+                max_workers=max_workers,
+                worker_timeout=worker_timeout,
+                logger=logger,
                 refresh_mode=args.refresh,
                 force_mode=args.force,
                 refresh_days=args.refresh_days,
             )
+
+            # Print summary
+            print_ingestion_summary(results)
+
+            log_event(logger, phase="concurrent.complete",
+                     success_count=sum(1 for r in results.values() if r.status == "success"),
+                     total_count=len(results))
+        else:
+            # Fallback to sequential processing
+            if use_concurrent and not CONCURRENT_AVAILABLE:
+                logger.warning("Concurrent processing requested but module not available, using sequential")
+
+            for ticker in tickers:
+                ingest_symbol(
+                    ticker,
+                    collections,
+                    logger,
+                    refresh_mode=args.refresh,
+                    force_mode=args.force,
+                    refresh_days=args.refresh_days,
+                )
 
 
 if __name__ == "__main__":

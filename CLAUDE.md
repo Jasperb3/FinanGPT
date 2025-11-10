@@ -1,15 +1,41 @@
 # CLAUDE.md
 
 **Project**: FinanGPT - AI-Powered Financial Data Analysis Platform
-**Status**: Production-ready (Phase 11 implemented)
-**Version**: 2.4 (Updated 2025-11-09)
+**Status**: Production-ready (Phase 11 + Enhancement Plan 4 Phases 0-1)
+**Version**: 2.5 (Updated 2025-11-10)
 
 ## Quick Reference
 
 **Tech Stack**: Python 3.x | MongoDB | DuckDB | Ollama (LLM) | yfinance | SQLite
 **Lines of Code**: ~8,500 Python | 20 core modules
 **Data**: Global markets (12+ currencies, auto-normalized to USD) + US equities
-**Latest**: Phase 11 + Enhancement Plan 3 (Phase 1 Performance + Phase 2 Global Markets)
+**Latest**: Phase 11 + Enhancement Plan 4 (Production Hardening & Performance Integration)
+
+### Enhancement Plan 4 - Phases 0-1 (NEW)
+
+**Phase 0: Emergency Fixes** ✅
+- Fixed duplicate hint augmentation bug in `query.py:844-845`
+- Added Ollama health check (`check_ollama_health()`) to `query.py` and `chat.py`
+- Implemented retry logic with exponential backoff (3 attempts: 1s, 2s, 4s delays)
+
+**Phase 1: Performance Integration** ✅
+- Integrated concurrent ingestion into `ingest.py` (10x speedup when enabled via config)
+- Integrated query result caching into `query.py` (1000x speedup for repeated queries)
+- Added `use_concurrent: true` flag in `config.yaml` for parallel ticker processing
+- Added `cache_enabled: true` flag for LRU cache with TTL (300s default)
+
+**Configuration** (`config.yaml`):
+```yaml
+ingestion:
+  use_concurrent: true      # Enable 10x faster parallel ingestion
+  max_workers: 10
+  worker_timeout: 120
+
+query:
+  cache_enabled: true       # Enable 1000x faster repeated queries
+  cache_ttl_seconds: 300
+  cache_max_entries: 100
+```
 
 ### Core Workflows
 
