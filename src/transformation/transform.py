@@ -28,32 +28,17 @@ try:
 except ImportError:
     STREAMING_AVAILABLE = False
 
+# Import centralized logging
+from src.utils.logging import configure_logger, log_event
+
+# Import centralized utilities
+from src.utils.common import is_numeric_strict as is_numeric
+
 LOGS_DIR = Path("logs")
 DUCKDB_PATH = "financial_data.duckdb"
 ANNUAL_TABLE = "financials.annual"
 QUARTERLY_TABLE = "financials.quarterly"
 
-
-def configure_logger() -> logging.Logger:
-    LOGS_DIR.mkdir(exist_ok=True)
-    logger = logging.getLogger("transform")
-    if logger.handlers:
-        return logger
-    logger.setLevel(logging.INFO)
-    logger.propagate = False
-    file_handler = logging.FileHandler(LOGS_DIR / f"transform_{datetime.now(UTC):%Y%m%d}.log")
-    stream_handler = logging.StreamHandler()
-    formatter = logging.Formatter("%(message)s")
-    file_handler.setFormatter(formatter)
-    stream_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
-    logger.addHandler(stream_handler)
-    return logger
-
-
-def log_event(logger: logging.Logger, **payload: Any) -> None:
-    entry = {"ts": datetime.now(UTC).isoformat(), **payload}
-    logger.info(json.dumps(entry))
 
 
 def load_database(client: MongoClient, mongo_uri: str) -> Database:
@@ -84,13 +69,6 @@ def parse_iso_date(value: Any) -> date:
     parsed = parse_utc_timestamp(iso_str)
     return parsed.date()
 
-
-def is_numeric(value: Any) -> bool:
-    if isinstance(value, bool):
-        return False
-    if isinstance(value, Number):
-        return True
-    return False
 
 
 def prepare_dataframe(documents: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
@@ -635,7 +613,7 @@ def main() -> None:
     mongo_uri = os.getenv("MONGO_URI")
     if not mongo_uri:
         raise SystemExit("MONGO_URI is not set.")
-    logger = configure_logger()
+    logger = configure_logger("transform")
 
     # Fetch all data from MongoDB
     with MongoClient(mongo_uri) as client:

@@ -37,6 +37,16 @@ try:
 except ImportError:
     CONCURRENT_AVAILABLE = False
 
+# Import centralized logging
+from src.utils.logging import configure_logger, log_event
+
+# Import centralized utilities
+from src.utils.common import is_numeric, as_text_fallback
+
+# Replace the local _as_text function with the shared as_text_fallback function
+# The original local function was: def _as_text(value: Any) -> str: return str(value or "").strip()
+_as_text = as_text_fallback  # Map the shared function to the local name for compatibility
+
 MAX_TICKERS_PER_RUN = 50
 MAX_ATTEMPTS = 3
 EST = ZoneInfo("US/Eastern")
@@ -121,30 +131,6 @@ class UnsupportedInstrument(RuntimeError):
 class StatementDownloadError(RuntimeError):
     """Raised when financial statements cannot be retrieved."""
 
-
-def configure_logger() -> logging.Logger:
-    """Initialise a JSON logger that writes to logs/ and stdout."""
-    LOGS_DIR.mkdir(exist_ok=True)
-    logger = logging.getLogger("ingest")
-    if logger.handlers:
-        return logger
-    logger.setLevel(logging.INFO)
-    logger.propagate = False
-    file_path = LOGS_DIR / f"ingest_{datetime.now(UTC):%Y%m%d}.log"
-    file_handler = logging.FileHandler(file_path)
-    stream_handler = logging.StreamHandler(sys.stdout)
-    fmt = logging.Formatter("%(message)s")
-    file_handler.setFormatter(fmt)
-    stream_handler.setFormatter(fmt)
-    logger.addHandler(file_handler)
-    logger.addHandler(stream_handler)
-    return logger
-
-
-def log_event(logger: logging.Logger, **payload: Any) -> None:
-    """Emit a structured JSON record."""
-    entry = {"ts": datetime.now(UTC).isoformat(), **payload}
-    logger.info(json.dumps(entry))
 
 
 def parse_args() -> argparse.Namespace:
@@ -664,17 +650,6 @@ def normalise_field_name(raw_key: str) -> str:
     camel = tokens[0].lower() + "".join(token.title() for token in tokens[1:])
     return camel
 
-
-def is_numeric(value: Any) -> bool:
-    if isinstance(value, bool):
-        return False
-    if isinstance(value, Number):
-        return math.isfinite(float(value))
-    return False
-
-
-def _as_text(value: Any) -> str:
-    return str(value or "").strip()
 
 
 def _duration_ms(start: float) -> int:
@@ -1385,7 +1360,7 @@ def main() -> None:
     mongo_uri = os.getenv("MONGO_URI")
     if not mongo_uri:
         raise SystemExit("MONGO_URI is not set. Please provide a Mongo connection string.")
-    logger = configure_logger()
+    logger = configure_logger("ingest")
     args = parse_args()
     tickers = read_tickers(args, logger)
 

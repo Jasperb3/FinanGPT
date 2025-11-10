@@ -30,11 +30,11 @@ ingestion:
   # Data settings
   price_lookback_days: 365
   auto_refresh_threshold_days: 7
-  batch_size: 100              # INCREASED from 50
+  batch_size: 200              # INCREASED from 50
   retry_backoff: [1, 2, 4]
   max_retries_per_ticker: 3
 
-  # Market restrictions (NEW - Phase 2)
+  # Market restrictions
   market_restrictions:
     mode: global  # Options: "global", "us_only", "eu_only", "custom"
 
@@ -117,7 +117,7 @@ features:
   valuation_metrics: true      # P/E, P/B, P/S, PEG, dividend yield
   earnings_intelligence: true  # EPS estimates vs actuals, earnings calendar
 
-# Currency support (NEW - Phase 2)
+# Currency support
 currency:
   base_currency: USD  # Currency for normalized metrics
   auto_fetch_rates: true  # Automatically fetch FX rates during ingestion
@@ -145,7 +145,7 @@ logging:
   max_file_size_mb: 10         # NEW: Log rotation
   backup_count: 5              # NEW: Number of backup logs
 
-# NEW: Performance monitoring
+# Performance monitoring
 monitoring:
   enable_metrics: false        # Prometheus metrics endpoint
   metrics_port: 9090

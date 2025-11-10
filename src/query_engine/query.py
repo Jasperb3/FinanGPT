@@ -24,6 +24,9 @@ from pymongo.database import Database
 
 from src.core.time_utils import parse_utc_timestamp
 
+# Import centralized logging
+from src.utils.logging import configure_logger, log_event
+
 # ============================================================================
 # Security: Input Sanitization
 # ============================================================================
@@ -474,22 +477,6 @@ SUMMARY_SAMPLE_LIMIT = 25
 SUMMARY_SAMPLE_LIMIT = 25
 
 
-def configure_logger() -> logging.Logger:
-    LOGS_DIR.mkdir(exist_ok=True)
-    logger = logging.getLogger("query")
-    if logger.handlers:
-        return logger
-    logger.setLevel(logging.INFO)
-    logger.propagate = False
-    handler = logging.FileHandler(LOGS_DIR / f"query_{datetime.now(UTC):%Y%m%d}.log")
-    stream = logging.StreamHandler(sys.stdout)
-    formatter = logging.Formatter("%(message)s")
-    handler.setFormatter(formatter)
-    stream.setFormatter(formatter)
-    logger.addHandler(handler)
-    logger.addHandler(stream)
-    return logger
-
 
 def load_mongo_database(mongo_uri: str) -> Optional[Database]:
     """Load MongoDB database for freshness checking."""
@@ -578,10 +565,6 @@ def check_data_freshness(
         # If we can't check freshness, don't block the query
         return {"is_stale": False, "stale_tickers": [], "freshness_info": {}}
 
-
-def log_event(logger: logging.Logger, **payload: Any) -> None:
-    entry = {"ts": datetime.now(UTC).isoformat(), **payload}
-    logger.info(json.dumps(entry))
 
 
 def introspect_schema(conn: duckdb.DuckDBPyConnection, tables: Sequence[str]) -> Dict[str, List[str]]:
@@ -1444,7 +1427,7 @@ def main() -> None:
         conn.close()
         raise SystemExit("No DuckDB tables found. Run transform.py first.")
 
-    logger = configure_logger()
+    logger = configure_logger("query")
 
     # Handle template execution
     if args.template:

@@ -17,6 +17,11 @@ Created: 2025-11-09
 from typing import Dict, Set, Optional, Any, Mapping
 from dataclasses import dataclass
 
+# Import centralized utilities
+from src.utils.common import as_text
+
+# Map the imported function to the expected local name
+_as_text = as_text  # This provides the same behavior as the original validators.py _as_text function
 
 # Allowed equity types (exclude funds, trusts, etc.)
 ALLOWED_EQUITY_TYPES = {
@@ -101,13 +106,6 @@ EU_ONLY_MARKET_CONFIG = MarketConfig(
 class UnsupportedInstrument(RuntimeError):
     """Raised when a ticker fails validation checks."""
     pass
-
-
-def _as_text(value: Any) -> str:
-    """Safely convert value to string."""
-    if value is None:
-        return ""
-    return str(value).strip()
 
 
 def is_etf(info: Mapping[str, Any]) -> bool:

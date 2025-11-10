@@ -36,6 +36,9 @@ from src.query_engine.query import (
     validate_sql,
 )
 
+# Import centralized logging
+from src.utils.logging import configure_logger, log_event
+
 # Import visualization functions
 from src.ui.visualize import (
     create_chart,
@@ -150,29 +153,6 @@ EXAMPLE_QUERIES = [
     "Compare revenue growth for FAANG stocks",
 ]
 
-
-def configure_logger() -> logging.Logger:
-    """Initialize a JSON logger for chat sessions."""
-    LOGS_DIR.mkdir(exist_ok=True)
-    logger = logging.getLogger("chat")
-    if logger.handlers:
-        return logger
-    logger.setLevel(logging.INFO)
-    logger.propagate = False
-    handler = logging.FileHandler(LOGS_DIR / f"chat_{datetime.now(UTC):%Y%m%d}.log")
-    stream = logging.StreamHandler(sys.stdout)
-    formatter = logging.Formatter("%(message)s")
-    handler.setFormatter(formatter)
-    stream.setFormatter(formatter)
-    logger.addHandler(handler)
-    logger.addHandler(stream)
-    return logger
-
-
-def log_event(logger: logging.Logger, **payload: Any) -> None:
-    """Emit a structured JSON log entry."""
-    entry = {"ts": datetime.now(UTC).isoformat(), **payload}
-    logger.info(json.dumps(entry))
 
 
 def call_ollama_chat(
@@ -398,20 +378,6 @@ def execute_query_with_retry(
     return None
 
 
-def trim_conversation_history(history: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    """Trim conversation history to prevent token overflow.
-
-    Keeps the system prompt and the most recent MAX_HISTORY_LENGTH messages.
-    """
-    if len(history) <= MAX_HISTORY_LENGTH + 1:  # +1 for system prompt
-        return history
-
-    # Keep system prompt (first message) and recent messages
-    system_prompt = [history[0]] if history and history[0]["role"] == "system" else []
-    recent_messages = history[-(MAX_HISTORY_LENGTH):]
-
-    return system_prompt + recent_messages
-
 
 def run_chat_loop(
     conn: duckdb.DuckDBPyConnection,
@@ -564,8 +530,12 @@ def run_chat_loop(
                 if conversation_history and conversation_history[-1]["role"] == "user":
                     conversation_history.pop()
 
-            # Trim history to prevent token overflow
-            conversation_history = trim_conversation_history(conversation_history)
+            # Trim history to prevent token overflow (simplified version - just keep recent messages)
+            # Using a simple approach to trim to last MAX_HISTORY_LENGTH messages plus system prompt
+            if len(conversation_history) > MAX_HISTORY_LENGTH + 1:
+                system_prompt = [conversation_history[0]] if conversation_history and conversation_history[0]["role"] == "system" else []
+                recent_messages = conversation_history[-MAX_HISTORY_LENGTH:]
+                conversation_history = system_prompt + recent_messages
 
             print()  # Blank line for readability
 
@@ -612,7 +582,7 @@ def main() -> None:
         raise SystemExit("No DuckDB tables found. Run transform.py first.")
 
     # Setup logging
-    logger = configure_logger()
+    logger = configure_logger("chat")
     log_event(logger, phase="chat.start", model=model)
 
     # Load MongoDB for freshness checking
