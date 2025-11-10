@@ -65,7 +65,7 @@ transform:
 
 query:
   # Result limits (INCREASED for better performance with caching)
-  default_limit: 50            # INCREASED from 25
+  default_limit: 500            # INCREASED from 25
   max_limit: 1000              # INCREASED from 100 (10x)
 
   # NEW: Caching settings

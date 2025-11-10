@@ -477,7 +477,6 @@ SUMMARY_SAMPLE_LIMIT = 25
 SUMMARY_SAMPLE_LIMIT = 25
 
 
-
 def load_mongo_database(mongo_uri: str) -> Optional[Database]:
     """Load MongoDB database for freshness checking."""
     try:
@@ -587,30 +586,49 @@ def introspect_schema(conn: duckdb.DuckDBPyConnection, tables: Sequence[str]) ->
 
 
 def build_system_prompt(schema: Mapping[str, Sequence[str]]) -> str:
+    """Builds an enhanced system prompt with detailed schema and query guidance."""
+    
     schema_lines = []
     for table, columns in schema.items():
         column_text = ", ".join(columns)
         schema_lines.append(f"- {table}: {column_text}")
     schema_block = "\n".join(schema_lines)
-    guidance: list[str] = []
-    ratios_columns = schema.get("ratios.financial")
-    if ratios_columns:
-        key_ratios = [col for col in ratios_columns if col not in {"ticker", "date"}]
-        if key_ratios:
-            guidance.append(
-                "Use `ratios.financial` for capital-efficiency metrics such as roe, roa, net_margin, gross_margin, "
-                "ebitda_margin, debt_ratio, asset_turnover, fcf_margin, and cash_conversion."
-            )
-    if "company.metadata" in schema:
-        guidance.append("Use `company.metadata` for company information: ticker, longName, sector, industry, website, country, exchange, marketCap, employees. Join on ticker to filter by sector/industry.")
-    if "company.peers" in schema:
-        guidance.append("Join `company.peers` when the query references industries or peer groups (FAANG, SEMICONDUCTORS, etc.).")
-    if any(table.startswith("analyst.") for table in schema.keys()):
-        guidance.append("Only use `analyst.*` tables when the user explicitly requests analyst sentiment, targets, or forecasts.")
-    table_guidance = ""
-    if guidance:
-        guidance = [f"- {line}" for line in guidance]
-        table_guidance = "Table guidance:\n" + "\n".join(guidance) + "\n"
+
+    # Enhanced table and column descriptions
+    detailed_descriptions = """
+**Detailed Table Descriptions:**
+
+*   **`company.metadata`**: Core company information.
+    *   `longName`: The full, official name of the company. **Use this for company names in results.**
+    *   `sector`: Broad economic sector (e.g., 'Technology', 'Healthcare').
+    *   `industry`: Specific industry within a sector (e.g., 'Software - Infrastructure').
+    *   `marketCap`: Total market value of the company's outstanding shares.
+    *   `country`: The country where the company is headquartered.
+
+*   **`financials.annual` / `financials.quarterly`**: Income statement, balance sheet, and cash flow data.
+    *   `totalRevenue`: The company's total sales over a period.
+    *   `netIncome`: The company's profit after all expenses and taxes.
+    *   `totalAssets`: Everything the company owns.
+    *   `totalDebt`: All of the company's short and long-term debt.
+
+*   **`prices.daily`**: Daily stock price data.
+    *   `close`: The closing price of the stock for the day.
+    *   `volume`: The number of shares traded during the day.
+
+*   **`ratios.financial`**: Pre-calculated financial ratios.
+    *   `roe`: Return on Equity (Net Income / Shareholder Equity). Measures profitability relative to equity.
+    *   `roa`: Return on Assets (Net Income / Total Assets). Measures profitability relative to assets.
+    *   `net_margin`: Net Profit Margin (Net Income / Revenue).
+    *   `pe_ratio`: Price-to-Earnings ratio.
+
+*   **`analyst.recommendations`**: Analyst ratings changes.
+    *   `action`: The action taken by the analyst (e.g., 'up', 'down', 'init').
+    *   `firm`: The name of the analyst's firm.
+
+*   **`technical.indicators`**: Technical analysis data.
+    *   `sma_50` / `sma_200`: 50-day and 200-day Simple Moving Averages. A "golden cross" is `sma_50 > sma_200`.
+    *   `rsi_14`: 14-day Relative Strength Index. < 30 is often considered oversold, > 70 is overbought.
+"""
 
     # Date context for natural language parsing
     today = date.today()
@@ -618,220 +636,129 @@ def build_system_prompt(schema: Mapping[str, Sequence[str]]) -> str:
     five_years_ago = today - timedelta(days=365*5)
 
     date_context = f"""
-Date Context (Today: {today.isoformat()}):
-- "last year" or "past year" → WHERE date >= '{one_year_ago.isoformat()}'
-- "last 5 years" → WHERE date >= '{five_years_ago.isoformat()}'
-- "recent" or "latest" → ORDER BY date DESC LIMIT 1
-- "2023" → WHERE YEAR(date) = 2023
-- "YTD" or "year to date" → WHERE YEAR(date) = {today.year}
+**Date Context (Today is {today.isoformat()}):**
+
+*   "last year" or "past year" → `WHERE date >= '{one_year_ago.isoformat()}'`
+*   "last 5 years" → `WHERE date >= '{five_years_ago.isoformat()}'`
+*   "recent" or "latest" → `ORDER BY date DESC LIMIT 1`
+*   "in 2023" → `WHERE YEAR(date) = 2023`
+*   "year to date" or "YTD" → `WHERE YEAR(date) = {today.year}`
 """
 
-    # Peer groups information
-    peer_groups_info = """
-Peer Groups (company.peers table):
-Available peer groups: FAANG, Magnificent Seven, Semiconductors, Cloud Computing,
-Social Media, Streaming, E-commerce, Payment Processors, Electric Vehicles, Airlines,
-Banks, Oil & Gas, Defense, Retail, Pharma, Telecom.
+    # Common query patterns and examples
+    query_patterns = """
+**Common Query Patterns & Examples:**
 
-Examples:
-- "Compare FAANG revenue" → JOIN company.peers WHERE peer_group = 'FAANG'
-- "Rank semiconductor companies" → JOIN company.peers WHERE peer_group = 'Semiconductors'
+1.  **Find companies in a specific sector with certain criteria:**
+    *   *User Query:* "Find tech stocks with P/E under 20"
+    *   *SQL:*
+        ```sql
+        SELECT
+          m.ticker,
+          m.longName,
+          v.pe_ratio
+        FROM valuation.metrics AS v
+        JOIN company.metadata AS m
+          ON v.ticker = m.ticker
+        WHERE
+          m.sector = 'Technology' AND v.pe_ratio < 20
+        ORDER BY
+          v.pe_ratio ASC
+        LIMIT 25
+        ```
+
+2.  **Compare a metric across a peer group:**
+    *   *User Query:* "Compare revenue growth for FAANG stocks"
+    *   *SQL:*
+        ```sql
+        SELECT
+          g.ticker,
+          g.date,
+          g.revenue_growth_annual
+        FROM growth.annual AS g
+        JOIN company.peers AS p
+          ON g.ticker = p.ticker
+        WHERE
+          p.peer_group = 'FAANG' AND g.date >= (current_date - INTERVAL '5' YEAR)
+        ORDER BY
+          g.ticker,
+          g.date
+        ```
+
+3.  **Rank companies by a metric:**
+    *   *User Query:* "What are the top 10 companies by market cap?"
+    *   *SQL:*
+        ```sql
+        SELECT
+          ticker,
+          longName,
+          marketCap
+        FROM company.metadata
+        ORDER BY
+          marketCap DESC
+        LIMIT 10
+        ```
 """
 
-    # Phase 8: Valuation & Earnings information
-    valuation_earnings_info = """
-Valuation Metrics (valuation.metrics table):
-Ratios: pe_ratio, pb_ratio, ps_ratio, peg_ratio, dividend_yield, payout_ratio
-Classifications: cap_class (Large Cap, Mid Cap, Small Cap)
-JOIN with company.metadata on ticker for company names, sector, industry
+    # Rules and common pitfalls
+    rules_and_pitfalls = """
+**SQL Generation Rules & Common Pitfalls:**
 
-Earnings Intelligence (earnings.history table):
-Fields: eps_estimate, eps_actual, eps_surprise, surprise_pct, revenue_estimate, revenue_actual
-
-Earnings Calendar (earnings.calendar and earnings.calendar_upcoming tables):
-Fields: earnings_date, period_ending, estimate
-
-Examples:
-- "Find tech stocks with P/E < 20" → SELECT v.ticker, m.longName, v.pe_ratio FROM valuation.metrics v JOIN company.metadata m ON v.ticker = m.ticker WHERE m.sector = 'Technology' AND v.pe_ratio < 20
-- "Show undervalued stocks" → SELECT * FROM valuation.metrics WHERE pe_ratio < 15
-- "Show stocks that beat earnings" → SELECT * FROM earnings.history WHERE eps_surprise > 0
-- "Upcoming earnings this week" → SELECT * FROM earnings.calendar_upcoming WHERE earnings_date <= CURRENT_DATE + 7
+*   **CRITICAL:** Your response MUST ONLY contain the SQL query wrapped in ```sql``` fences. No explanations, no commentary, no example output.
+*   **Always use table aliases** for clarity (e.g., `FROM company.metadata AS m`).
+*   **NEVER use `ILIKE`**. For case-insensitive matching, use `lower(column_name) = 'value'`.
+*   **Column `longName` in `company.metadata` contains the company's name.** Do not use `name` or `company_name`.
+*   When a user asks for "growth", look for pre-calculated growth fields like `revenue_growth_annual` in the `growth.annual` table first.
+*   For rankings, use `ORDER BY` and `LIMIT`. For more complex rankings, use window functions like `RANK()`.
+*   Default to a `LIMIT` of 25 if the user doesn't specify a number. The maximum `LIMIT` is 100.
 """
-
-    # Phase 9: Analyst Intelligence information
-    analyst_intelligence_info = """
-Analyst Intelligence (Phase 9):
-
-Analyst Recommendations (analyst.recommendations table):
-Fields: firm, from_grade, to_grade, action, action_score
-Actions: up (upgrade), down (downgrade), maintain, init (initiated), reit (reiterated)
-
-Price Targets (analyst.price_targets table):
-Fields: current_price, target_low, target_mean, target_high, upside_pct, downside_pct, max_upside_pct, num_analysts
-
-Analyst Consensus (analyst.consensus table):
-Fields: strong_buy, buy, hold, sell, strong_sell, total_analysts, consensus_rating, consensus_label
-Consensus Labels: Strong Buy, Buy, Hold, Sell, Strong Sell
-
-Growth Estimates (analyst.growth_estimates table):
-Fields: current_qtr_growth, next_qtr_growth, current_year_growth, next_year_growth, next_5yr_growth, peg_forward
-
-Examples:
-- "Show me stocks with recent analyst upgrades" → SELECT * FROM analyst.recommendations WHERE action = 'up' ORDER BY date DESC
-- "Find stocks with highest upside to price targets" → SELECT * FROM analyst.price_targets ORDER BY upside_pct DESC
-- "Stocks rated Strong Buy with upside > 15%" → SELECT * FROM analyst.consensus c JOIN analyst.price_targets p ON c.ticker = p.ticker WHERE consensus_label = 'Strong Buy' AND upside_pct > 15
-- "Companies with 5-year growth estimates > 20%" → SELECT * FROM analyst.growth_estimates WHERE next_5yr_growth > 20
-"""
-
-    # Phase 10: Technical Analysis information
-    technical_analysis_info = """
-Technical Analysis (Phase 10 - technical.indicators table):
-
-Moving Averages:
-- sma_20, sma_50, sma_200: Simple moving averages
-- ema_12, ema_26: Exponential moving averages
-
-Momentum Indicators:
-- rsi_14: Relative Strength Index (0-100, <30=oversold, >70=overbought)
-- macd, macd_signal, macd_histogram: MACD indicator components
-
-Volatility:
-- bb_upper, bb_middle, bb_lower: Bollinger Bands (20-day, 2 std dev)
-
-Volume:
-- volume_avg_20: 20-day average volume
-- volume_ratio: Current volume / 20-day average
-
-Price Momentum:
-- pct_change_1d, pct_change_5d, pct_change_20d, pct_change_60d, pct_change_252d: % price changes
-
-52-Week Analysis:
-- week_52_high, week_52_low: 52-week high and low prices
-- pct_from_52w_high, pct_from_52w_low: Distance from 52-week extremes (%)
-
-Examples:
-- "Find stocks with golden cross (SMA50 > SMA200)" → SELECT * FROM technical.indicators WHERE sma_50 > sma_200
-- "Show oversold stocks (RSI < 30)" → SELECT * FROM technical.indicators WHERE rsi_14 < 30
-- "Stocks breaking above Bollinger upper band" → SELECT * FROM technical.indicators WHERE close > bb_upper
-- "Positive MACD crossover" → SELECT * FROM technical.indicators WHERE macd > macd_signal AND macd_histogram > 0
-- "Stocks near 52-week lows with high volume" → SELECT * FROM technical.indicators WHERE pct_from_52w_low < 5 AND volume_ratio > 2
-"""
-
-    # Window functions and statistical aggregations
-    advanced_sql = """
-Advanced SQL Features Allowed:
-- Window functions: RANK(), ROW_NUMBER(), DENSE_RANK(), LAG(), LEAD(), NTILE()
-- Statistical: AVG(), STDDEV(), MEDIAN(), PERCENTILE_CONT()
-- Aggregations: SUM(), COUNT(), MIN(), MAX()
-- Use PARTITION BY and ORDER BY with window functions
-"""
-
-    rules = [
-        "Return a single SELECT statement that targets the DuckDB tables listed above.",
-        "Do not mutate data. DDL/DML, temporary tables, and multi-statement SQL are forbidden.",
-        "Always project the date column and cap the LIMIT at 100 rows.",
-        "Default to LIMIT 25 when the user does not specify a limit.",
-        "Prefer explicit column lists over SELECT * and keep SQL readable.",
-        "Use window functions for rankings, running calculations, and peer comparisons.",
-        "Reference peer groups table for comparative analysis across predefined groups.",
-        "Use ANSI interval arithmetic such as `current_date + INTERVAL '1' YEAR`; avoid `date_add` unless you pass (date, interval).",
-        "Wrap the SQL inside ```sql``` fences and do not add commentary or explanations.",
-    ]
-    rules_block = "\n".join(f"- {rule}" for rule in rules)
 
     return (
-        "You are a DuckDB SQL query generator for financial data analysis.\n\n"
+        "You are an expert DuckDB SQL query generator for financial data analysis.\n\n"
+        "Your task is to convert a user's natural language question into a single, valid DuckDB SQL query.\n"
+        "You must adhere to all the rules and guidelines provided.\n\n"
         "════════════════════════════════════════════════════════════════\n"
-        "CRITICAL: Your response must ONLY contain SQL code wrapped in ```sql``` fences.\n"
-        "DO NOT include:\n"
-        "  ❌ Explanations or commentary\n"
-        "  ❌ Example output or sample data\n"
-        "  ❌ Markdown tables\n"
-        "  ❌ Any text outside the SQL code block\n\n"
-        "REQUIRED FORMAT:\n"
-        "```sql\n"
-        "SELECT column1, column2\n"
-        "FROM schema.table\n"
-        "WHERE condition\n"
-        "LIMIT 25\n"
-        "```\n"
-        "════════════════════════════════════════════════════════════════\n\n"
-        f"DATABASE SCHEMA (DuckDB):\n{schema_block}\n\n"
-        "════════════════════════════════════════════════════════════════\n"
-        "KEY TABLE RELATIONSHIPS:\n"
-        "════════════════════════════════════════════════════════════════\n\n"
-        "1. COMPANY INFORMATION:\n"
-        "   Primary table: company.metadata\n"
-        "   Join key: ticker\n"
-        "   Common columns:\n"
-        "     - ticker (VARCHAR) - Stock symbol\n"
-        "     - longName (VARCHAR) - Full company name (NOT 'name' or 'company_name'!)\n"
-        "     - shortName (VARCHAR) - Short company name\n"
-        "     - sector (VARCHAR) - Business sector (e.g., 'Technology', 'Healthcare')\n"
-        "     - industry (VARCHAR) - Specific industry\n"
-        "     - marketCap (BIGINT) - Market capitalization\n"
-        "     - exchange (VARCHAR), country (VARCHAR), website (VARCHAR)\n"
-        "   ⚠️  CRITICAL: Column is 'longName' NOT 'name' or 'company_name'\n"
-        "   ⚠️  CRITICAL: There is NO 'stocks' or 'companies' table. Use company.metadata!\n\n"
-        "2. VALUATION METRICS:\n"
-        "   Primary table: valuation.metrics\n"
-        "   Join key: ticker\n"
-        "   Contains: pe_ratio, pb_ratio, ps_ratio, peg_ratio, dividend_yield\n"
-        "   Join with company.metadata for sector/industry filtering:\n"
-        "   SELECT v.*, m.longName, m.sector\n"
-        "   FROM valuation.metrics v\n"
-        "   JOIN company.metadata m ON v.ticker = m.ticker\n\n"
-        "3. FINANCIAL STATEMENTS:\n"
-        "   Tables: financials.annual, financials.quarterly\n"
-        "   Join key: ticker, date\n"
-        "   Contains: totalRevenue, netIncome, totalAssets, totalDebt, etc.\n\n"
-        "4. STOCK PRICES:\n"
-        "   Table: prices.daily\n"
-        "   Join key: ticker, date\n"
-        "   Contains: open, high, low, close, volume\n\n"
-        "5. TECHNICAL INDICATORS:\n"
-        "   Table: technical.indicators\n"
-        "   Join key: ticker, date\n"
-        "   Contains: sma_20, sma_50, rsi_14, macd, bb_upper, volume_ratio\n\n"
-        f"{table_guidance}"
+        f"**DATABASE SCHEMA (DuckDB):**\n{schema_block}\n\n"
+        f"{detailed_descriptions}\n"
         f"{date_context}\n"
-        f"{peer_groups_info}\n"
-        "════════════════════════════════════════════════════════════════\n"
-        "COMMON QUERY PATTERNS:\n"
-        "════════════════════════════════════════════════════════════════\n\n"
-        "Filter by sector/industry (EXACT column names):\n"
-        "  SELECT v.ticker,\n"
-        "         m.longName,     -- NOT 'name' or 'company_name'!\n"
-        "         m.sector,\n"
-        "         v.pe_ratio,\n"
-        "         v.pb_ratio\n"
-        "  FROM valuation.metrics v\n"
-        "  JOIN company.metadata m ON v.ticker = m.ticker\n"
-        "  WHERE m.sector = 'Technology'\n"
-        "    AND v.pe_ratio < 20\n"
-        "  ORDER BY v.pe_ratio ASC\n"
-        "  LIMIT 25\n\n"
-        "Latest financial data:\n"
-        "  SELECT ticker, date, totalRevenue, netIncome\n"
-        "  FROM financials.annual\n"
-        "  WHERE ticker = 'AAPL'\n"
-        "  ORDER BY date DESC\n"
-        "  LIMIT 5\n\n"
-        "Rank companies:\n"
-        "  SELECT ticker, revenue,\n"
-        "         RANK() OVER (ORDER BY revenue DESC) as rank\n"
-        "  FROM financials.annual\n"
-        "  WHERE date = (SELECT MAX(date) FROM financials.annual)\n"
-        "  LIMIT 25\n\n"
-        f"{valuation_earnings_info}\n"
-        f"{analyst_intelligence_info}\n"
-        f"{technical_analysis_info}\n"
-        f"{advanced_sql}\n"
-        "════════════════════════════════════════════════════════════════\n"
-        f"SQL RULES:\n{rules_block}\n"
+        f"{query_patterns}\n"
+        f"{rules_and_pitfalls}"
         "════════════════════════════════════════════════════════════════\n\n"
         "REMINDER: Output ONLY the SQL query in ```sql``` fences. Nothing else.\n"
     )
+
+
+def augment_question_with_hints(question: str) -> str:
+    """Augment user question with helpful hints AND enforce SQL-only response."""
+    hints: List[str] = []
+    lowered = question.lower()
+
+    # More specific hints based on keywords
+    if any(keyword in lowered for keyword in ("analyst", "price target", "recommendation")):
+        hints.append("For analyst ratings or price targets, join `analyst.price_targets` with `analyst.consensus` on the ticker.")
+    if "golden cross" in lowered:
+        hints.append("A 'golden cross' occurs when `sma_50` is greater than `sma_200` in the `technical.indicators` table.")
+    if "oversold" in lowered or "rsi" in lowered:
+        hints.append("Check for `rsi_14 < 30` in the `technical.indicators` table for oversold conditions.")
+    if "undervalued" in lowered or "p/e" in lowered:
+        hints.append("For valuation questions, use `valuation.metrics` and look at `pe_ratio`, `pb_ratio`, etc. A low P/E ratio can indicate an undervalued stock.")
+
+    # Always add critical reminders to user message
+    reminder = (
+        "\n\n"
+        "IMPORTANT REMINDERS:\n"
+        "1. Output ONLY SQL code wrapped in ```sql``` fences.\n"
+        "2. Use `company.metadata` for company info (the column is `longName`).\n"
+        "3. Join tables on the `ticker` column.\n"
+        "4. Use table aliases for readability.\n"
+        "5. NO explanations, tables, or prose - ONLY SQL code."
+    )
+
+    if not hints:
+        return f"{question}{reminder}"
+
+    helper_block = "\n".join(f"- {hint}" for hint in hints)
+    return f"{question}\n\n**Helpful Hints:**\n{helper_block}{reminder}"
 
 
 def check_ollama_health(base_url: str, timeout: int = 5) -> bool:
@@ -841,6 +768,57 @@ def check_ollama_health(base_url: str, timeout: int = 5) -> bool:
         return response.status_code == 200
     except (requests.ConnectionError, requests.Timeout):
         return False
+
+
+def call_ollama_chat(
+    base_url: str,
+    model: str,
+    messages: List[Dict[str, str]],
+    timeout: int = 60,
+) -> str:
+    """Call Ollama chat API with conversation history."""
+    payload = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+    }
+    response = requests.post(
+        f"{base_url}/api/chat",
+        json=payload,
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    data = response.json()
+    message = data.get("message") or {}
+    content = message.get("content")
+    if not content:
+        raise ValueError("Ollama returned an empty response.")
+    return content
+
+
+def call_ollama_chat_with_retry(
+    base_url: str,
+    model: str,
+    messages: List[Dict[str, str]],
+    max_retries: int = 3,
+    backoff: list = None,
+    timeout: int = 60
+) -> str:
+    """Call Ollama chat API with exponential backoff on transient failures."""
+    if backoff is None:
+        backoff = [1, 2, 4]
+
+    logger = logging.getLogger("chat")
+
+    for attempt, delay in enumerate(backoff[:max_retries], start=1):
+        try:
+            return call_ollama_chat(base_url, model, messages, timeout)
+        except (requests.ConnectionError, requests.Timeout) as e:
+            if attempt == max_retries:
+                raise
+            logger.warning(f"Ollama call failed (attempt {attempt}/{max_retries}), "
+                          f"retrying in {delay}s: {e}")
+            time.sleep(delay)
 
 
 def call_ollama(
@@ -1219,7 +1197,7 @@ def pretty_print(columns: Sequence[str], rows: Sequence[Sequence[Any]]) -> None:
         for idx, value in enumerate(row):
             widths[idx] = max(widths[idx], len(str(value)))
     header = " | ".join(str(col).ljust(widths[idx]) for idx, col in enumerate(columns))
-    divider = "-+-".join("-" * width for width in widths)
+    divider = "- + -".join("-" * width for width in widths)
     print(header)
     print(divider)
     for row in rows:
@@ -1308,56 +1286,6 @@ def _fallback_summary(question: str, columns: Sequence[str], rows: Sequence[Sequ
         f"Returned {total_rows} rows. Latest row snapshot: {details}. "
         "Review the table above for full details."
     )
-
-
-def augment_question_with_hints(question: str) -> str:
-    """Augment user question with helpful hints AND enforce SQL-only response."""
-    hints: List[str] = []
-    lowered = question.lower()
-    if any(keyword in lowered for keyword in ("analyst", "price target", "price targets", "recommendation", "consensus")):
-        hints.append(
-            "Use `analyst.price_targets` (current_price, target_low/mean/high, upside_pct) and `analyst.consensus` "
-            "(strong_buy..strong_sell, consensus_label) filtered by the requested ticker. Limit to the next 12 months "
-            "using `WHERE date BETWEEN current_date AND current_date + INTERVAL '12' MONTH`."
-        )
-    if any(keyword in lowered for keyword in ("roe", "return on equity", "roa", "margin")):
-        hints.append(
-            "For ROE/ROA/margin questions, pull metrics from `ratios.financial` instead of analyst tables."
-        )
-    if "peer" in lowered or "similar companies" in lowered:
-        hints.append(
-            "Use `company.peers` joined to `company.metadata` or valuation tables to compare companies within the same peer_group."
-        )
-    if any(keyword in lowered for keyword in ("p/e", "pe ratio", "price-to-earnings", "valuation")):
-        hints.append(
-            "Retrieve valuation ratios (pe_ratio, pb_ratio, ps_ratio, dividend_yield, peg_ratio) from `valuation.metrics`."
-        )
-    if any(keyword in lowered for keyword in ("net income", "revenue", "fiscal year", "annual results")):
-        hints.append(
-            "For net income or revenue questions, select `netIncome` and `totalRevenue` from `financials.annual` "
-            "filtered by the specific ticker and order by date DESC LIMIT 1 to capture the latest fiscal year."
-        )
-    if any(keyword in lowered for keyword in ("eps", "earnings per share")):
-        hints.append(
-            "For EPS trends, query `earnings.history` with `eps_actual`, `report_date`, and window functions such as "
-            "LAG() over the past N quarters (`WHERE ticker = '<TICKER>' AND report_date >= current_date - INTERVAL '2' YEAR`)."
-        )
-    # Always add critical reminders to user message
-    reminder = (
-        "\n\n"
-        "IMPORTANT REMINDERS:\n"
-        "1. Output ONLY SQL code wrapped in ```sql``` fences\n"
-        "2. Use company.metadata for company info (NOT 'stocks' or 'companies')\n"
-        "3. Use valuation.metrics for P/E, P/B ratios\n"
-        "4. Join tables: valuation.metrics JOIN company.metadata ON ticker\n"
-        "5. NO explanations, tables, or prose - ONLY SQL code"
-    )
-
-    if not hints:
-        return f"{question}{reminder}"
-
-    helper_block = "\n".join(f"- {hint}" for hint in hints)
-    return f"{question}\n\nHelper Notes:\n{helper_block}{reminder}"
 
 
 def main() -> None:

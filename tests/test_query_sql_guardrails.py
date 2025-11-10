@@ -1,6 +1,6 @@
 import unittest
 
-from query import validate_sql
+from src.query_engine.query import validate_sql
 
 
 SCHEMA = {

@@ -80,7 +80,7 @@ An enterprise-grade financial intelligence platform that combines comprehensive 
 ```bash
 # 1. Clone and setup
 git clone <repository>
-cd FinanGPT
+cd financial_data_app_IV
 python3 -m venv .venv
 source .venv/bin/activate  # Linux/Mac
 # .venv\Scripts\activate    # Windows
@@ -105,6 +105,8 @@ ollama serve
 ollama pull gpt-oss:latest
 ```
 
+**Important**: All Python scripts should be run from the project root directory. The wrapper scripts (`finangpt.py`, `chat.py`, `query.py`, `ingest.py`, `transform.py`) automatically set up the Python path to find the `src` module.
+
 ### Your First Query
 
 ```bash
@@ -112,14 +114,52 @@ ollama pull gpt-oss:latest
 python finangpt.py refresh --tickers AAPL,BMW.DE,7203.T
 
 # Option 2: Interactive chat
-python finangpt.py chat
+python chat.py
 > "Compare AAPL, BMW.DE, and Toyota by revenue in USD"
 
 # Option 3: One-shot query
-python finangpt.py query "Show me tech stocks with P/E ratio < 20"
+python query.py "Show me tech stocks with P/E ratio < 20"
 ```
 
 **That's it!** You now have a global financial intelligence platform.
+
+---
+
+## 📝 Running Commands
+
+### Entry Points Overview
+
+All commands must be run from the **project root directory**. The project provides wrapper scripts that automatically configure the Python path:
+
+| Script | Purpose | Example |
+|--------|---------|---------|
+| `finangpt.py` | Unified CLI (recommended) | `python finangpt.py refresh --tickers AAPL` |
+| `chat.py` | Interactive chat interface | `python chat.py` |
+| `query.py` | One-shot queries | `python query.py "Show AAPL revenue"` |
+| `ingest.py` | Data ingestion only | `python ingest.py --tickers AAPL,MSFT` |
+| `transform.py` | Data transformation only | `python transform.py` |
+
+**Important**:
+- ✅ **DO** use: `python finangpt.py`, `python chat.py`, `python query.py`
+- ❌ **DON'T** use: `python src/cli/finangpt.py`, `python src/ui/chat.py` (will fail with import errors)
+
+### Available Commands
+
+```bash
+# Unified CLI - All operations
+python finangpt.py ingest --tickers AAPL,MSFT,GOOGL
+python finangpt.py transform
+python finangpt.py query "your question"
+python finangpt.py chat
+python finangpt.py status
+python finangpt.py refresh --tickers-file tickers.csv
+
+# Individual scripts - Specific operations
+python chat.py              # Interactive mode
+python query.py "question"  # One-shot query
+python ingest.py --tickers AAPL,MSFT
+python transform.py
+```
 
 ---
 

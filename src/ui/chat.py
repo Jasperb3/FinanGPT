@@ -25,7 +25,6 @@ from src.query_engine.query import (
     ALLOWED_TABLES,
     DEFAULT_STALENESS_THRESHOLD_DAYS,
     build_system_prompt,
-    call_ollama_with_retry,
     check_data_freshness,
     check_ollama_health,
     extract_sql,
@@ -34,6 +33,7 @@ from src.query_engine.query import (
     load_mongo_database,
     pretty_print,
     validate_sql,
+    call_ollama_chat_with_retry,
 )
 
 # Import centralized logging
@@ -153,59 +153,6 @@ EXAMPLE_QUERIES = [
     "Compare revenue growth for FAANG stocks",
 ]
 
-
-
-def call_ollama_chat(
-    base_url: str,
-    model: str,
-    messages: List[Dict[str, str]],
-    timeout: int = 60,
-) -> str:
-    """Call Ollama chat API with conversation history."""
-    payload = {
-        "model": model,
-        "messages": messages,
-        "stream": False,
-    }
-    response = requests.post(
-        f"{base_url}/api/chat",
-        json=payload,
-        timeout=timeout,
-    )
-    response.raise_for_status()
-    data = response.json()
-    message = data.get("message") or {}
-    content = message.get("content")
-    if not content:
-        raise ValueError("Ollama returned an empty response.")
-    return content
-
-
-def call_ollama_chat_with_retry(
-    base_url: str,
-    model: str,
-    messages: List[Dict[str, str]],
-    max_retries: int = 3,
-    backoff: list = None,
-    timeout: int = 60
-) -> str:
-    """Call Ollama chat API with exponential backoff on transient failures."""
-    if backoff is None:
-        backoff = [1, 2, 4]
-
-    logger = logging.getLogger("chat")
-
-    for attempt, delay in enumerate(backoff[:max_retries], start=1):
-        try:
-            return call_ollama_chat(base_url, model, messages, timeout)
-        except (requests.ConnectionError, requests.Timeout) as e:
-            if attempt == max_retries:
-                raise
-            logger.warning(f"Ollama call failed (attempt {attempt}/{max_retries}), "
-                          f"retrying in {delay}s: {e}")
-            time.sleep(delay)
-
-
 def print_welcome_message(schema: Mapping[str, Sequence[str]]) -> None:
     """Display welcome message with available data and example queries."""
     print("\n" + "=" * 70)
@@ -289,6 +236,8 @@ def execute_query_with_retry(
 
     Returns: (columns, rows, sql, df) tuple or None if all retries failed.
     """
+    error_handler = SmartErrorHandler(schema) if QUERY_INTELLIGENCE_AVAILABLE else None
+
     for attempt in range(MAX_RETRIES):
         try:
             # Trim conversation history to fit context window
@@ -300,7 +249,7 @@ def execute_query_with_retry(
             except requests.ConnectionError as conn_err:
                 # Graceful degradation when Ollama is down
                 if RESILIENCE_AVAILABLE and attempt == 0:  # Only on first attempt
-                    print(f"\n⚠️  Ollama connection error: {conn_err}")
+                    print(f"\n☢\u2005 Ollama connection error: {conn_err}")
                     sql = handle_ollama_failure(conn_err)
                     if not sql:
                         return None
@@ -324,7 +273,7 @@ def execute_query_with_retry(
                 if tickers:
                     freshness = check_data_freshness(mongo_db, tickers)
                     if freshness["is_stale"]:
-                        print(f"\n⚠️  Warning: Data for {', '.join(freshness['stale_tickers'])} may be stale")
+                        print(f"\n☢\u2005 Warning: Data for {', '.join(freshness['stale_tickers'])} may be stale")
                         print(f"   Run: python ingest.py --refresh --tickers {','.join(tickers)}")
 
             # Execute query
@@ -361,12 +310,15 @@ def execute_query_with_retry(
                 return None
 
             # Provide feedback to LLM for retry
-            print(f"⚠️  Attempt {attempt + 1} failed, retrying...")
-            feedback = (
-                f"The previous SQL query failed with error: {error_msg}\n"
-                f"Please revise the query to fix this issue. "
-                f"Remember to only use tables from the allowed list and ensure all columns exist."
-            )
+            print(f"☢\u2005 Attempt {attempt + 1} failed, retrying...")
+            if error_handler:
+                feedback = error_handler.get_feedback(sql, error_msg, user_query)
+            else:
+                feedback = (
+                    f"The previous SQL query failed with error: {error_msg}\n"
+                    f"Please revise the query to fix this issue. "
+                    f"Remember to only use tables from the allowed list and ensure all columns exist."
+                )
             conversation_history.append({"role": "system", "content": feedback})
 
         except requests.RequestException as exc:
@@ -377,6 +329,140 @@ def execute_query_with_retry(
 
     return None
 
+
+def handle_command(user_input: str, query_history: Optional[QueryHistory], conversation_history: List[Dict[str, str]], system_prompt: str) -> bool:
+    """
+    Handle slash commands.
+    Returns True if the command was handled, False otherwise.
+    """
+    if user_input.lower() in {"/exit", "/quit"}:
+        print("\n👋 Goodbye! Your session has been logged.")
+        return True
+
+    if user_input.lower() == "/help":
+        print_help()
+        return True
+
+    if user_input.lower() == "/clear":
+        conversation_history.clear()
+        conversation_history.append({"role": "system", "content": system_prompt})
+        print("\n🔄 Conversation history cleared.\n")
+        return True
+
+    if query_history and user_input.lower() == "/history":
+        recent = query_history.get_recent_queries(limit=20)
+        print(format_query_history(recent))
+        return True
+
+    if query_history and user_input.lower() == "/favorites":
+        favorites = query_history.get_favorites()
+        print(format_favorites(favorites))
+        return True
+
+    if query_history and user_input.lower().startswith("/recall "):
+        try:
+            query_id = int(user_input.split()[1])
+            saved_query = query_history.get_query(query_id)
+            if saved_query:
+                user_input = saved_query["user_query"]
+                print(f"\n🔄 Recalling query #{query_id}: {user_input}\n")
+                return False  # Let the main loop process the recalled query
+            else:
+                print(f"\n❌ Query #{query_id} not found.\n")
+                return True
+        except (ValueError, IndexError):
+            print("\n❌ Usage: /recall <id>\n")
+            return True
+
+    if query_history and user_input.lower().startswith("/favorite "):
+        try:
+            query_id = int(user_input.split()[1])
+            query_history.mark_favorite(query_id, True)
+            print(f"\n⭐️ Query #{query_id} marked as favorite.\n")
+            return True
+        except (ValueError, IndexError):
+            print("\n❌ Usage: /favorite <id>\n")
+            return True
+
+    return False
+
+
+def process_query(
+    user_input: str,
+    conn: duckdb.DuckDBPyConnection,
+    base_url: str,
+    model: str,
+    conversation_history: List[Dict[str, str]],
+    schema: Mapping[str, Sequence[str]],
+    logger: logging.Logger,
+    mongo_db: Optional[Database],
+    skip_freshness: bool,
+    debug: bool,
+    query_history: Optional[QueryHistory],
+):
+    """
+    Process a user's query.
+    """
+    conversation_history.append({"role": "user", "content": user_input})
+
+    result = execute_query_with_retry(
+        conn,
+        base_url,
+        model,
+        conversation_history,
+        schema,
+        logger,
+        mongo_db,
+        skip_freshness,
+        user_input,
+        debug,
+    )
+
+    if result:
+        columns, rows, sql, df = result
+
+        print(f"\n📊 Generated SQL: {sql}")
+        print(f"\n✅ Results ({len(rows)} rows):\n")
+        pretty_print_formatted(columns, rows, use_formatting=True)
+
+        chart_type = detect_visualization_intent(user_input, df)
+        if chart_type and not df.empty:
+            chart_path = create_chart(df, chart_type, f"Query Result - {chart_type.title()} Chart", user_input)
+            if chart_path:
+                print(f"\n📈 Chart saved: {chart_path}")
+
+        if query_history:
+            try:
+                query_history.save_query(
+                    user_query=user_input,
+                    generated_sql=sql,
+                    row_count=len(rows),
+                    execution_time_ms=None,
+                )
+            except Exception:
+                pass
+
+        conversation_history.append({
+            "role": "assistant",
+            "content": f"Query executed successfully. SQL: {sql}\nReturned {len(rows)} rows."
+        })
+
+        if rows:
+            conversation_history.append({
+                "role": "system",
+                "content": f"Query returned {len(rows)} rows with columns: {', '.join(columns)}"
+            })
+    else:
+        print("💡 Tip: Try rephrasing your question or being more specific.\n")
+        if conversation_history and conversation_history[-1]["role"] == "user":
+            conversation_history.pop()
+
+    if len(conversation_history) > MAX_HISTORY_LENGTH + 1:
+        system_prompt = [conversation_history[0]] if conversation_history and conversation_history[0]["role"] == "system" else []
+        recent_messages = conversation_history[-MAX_HISTORY_LENGTH:]
+        conversation_history = system_prompt + recent_messages
+
+    print()
 
 
 def run_chat_loop(
@@ -390,13 +476,11 @@ def run_chat_loop(
     debug: bool = False,
 ) -> None:
     """Main chat loop with conversation history."""
-    # Initialize conversation with system prompt
     system_prompt = build_system_prompt(schema)
     conversation_history: List[Dict[str, str]] = [
         {"role": "system", "content": system_prompt}
     ]
 
-    # Initialize query history (Phase 11)
     query_history = None
     if QUERY_INTELLIGENCE_AVAILABLE:
         try:
@@ -408,67 +492,18 @@ def run_chat_loop(
 
     while True:
         try:
-            # Get user input
             user_input = input("💬 Query> ").strip()
-
             if not user_input:
                 continue
 
-            # Handle commands
-            if user_input.lower() in {"/exit", "/quit"}:
-                print("\n👋 Goodbye! Your session has been logged.")
-                break
-
-            if user_input.lower() == "/help":
-                print_help()
-                continue
-
-            if user_input.lower() == "/clear":
-                conversation_history = [
-                    {"role": "system", "content": system_prompt}
-                ]
-                print("\n🔄 Conversation history cleared.\n")
-                continue
-
-            # Phase 11: Query history commands
-            if query_history and user_input.lower() == "/history":
-                recent = query_history.get_recent_queries(limit=20)
-                print(format_query_history(recent))
-                continue
-
-            if query_history and user_input.lower() == "/favorites":
-                favorites = query_history.get_favorites()
-                print(format_favorites(favorites))
-                continue
-
-            if query_history and user_input.lower().startswith("/recall "):
-                try:
-                    query_id = int(user_input.split()[1])
-                    saved_query = query_history.get_query(query_id)
-                    if saved_query:
-                        user_input = saved_query["user_query"]
-                        print(f"\n🔄 Recalling query #{query_id}: {user_input}\n")
-                    else:
-                        print(f"\n❌ Query #{query_id} not found.\n")
-                        continue
-                except (ValueError, IndexError):
-                    print("\n❌ Usage: /recall <id>\n")
+            if user_input.startswith("/"):
+                if handle_command(user_input, query_history, conversation_history, system_prompt):
+                    if user_input.lower() in {"/exit", "/quit"}:
+                        break
                     continue
 
-            if query_history and user_input.lower().startswith("/favorite "):
-                try:
-                    query_id = int(user_input.split()[1])
-                    query_history.mark_favorite(query_id, True)
-                    print(f"\n⭐ Query #{query_id} marked as favorite.\n")
-                except (ValueError, IndexError):
-                    print("\n❌ Usage: /favorite <id>\n")
-                continue
-
-            # Add user message to history
-            conversation_history.append({"role": "user", "content": user_input})
-
-            # Execute query with retry logic
-            result = execute_query_with_retry(
+            process_query(
+                user_input,
                 conn,
                 base_url,
                 model,
@@ -477,67 +512,9 @@ def run_chat_loop(
                 logger,
                 mongo_db,
                 skip_freshness,
-                user_input,
                 debug,
+                query_history,
             )
-
-            if result:
-                columns, rows, sql, df = result
-
-                # Show results
-                print(f"\n📊 Generated SQL: {sql}")
-                print(f"\n✅ Results ({len(rows)} rows):\n")
-
-                # Use enhanced formatting
-                pretty_print_formatted(columns, rows, use_formatting=True)
-
-                # Detect visualization intent and create chart
-                chart_type = detect_visualization_intent(user_input, df)
-                if chart_type and not df.empty:
-                    chart_path = create_chart(df, chart_type, f"Query Result - {chart_type.title()} Chart", user_input)
-                    if chart_path:
-                        print(f"\n📈 Chart saved: {chart_path}")
-
-                # Save to query history (Phase 11)
-                if query_history:
-                    try:
-                        query_history.save_query(
-                            user_query=user_input,
-                            generated_sql=sql,
-                            row_count=len(rows),
-                            execution_time_ms=None  # Can add timing if needed
-                        )
-                    except Exception as e:
-                        # Don't fail on history save error
-                        pass
-
-                # Add successful query to history
-                conversation_history.append({
-                    "role": "assistant",
-                    "content": f"Query executed successfully. SQL: {sql}\nReturned {len(rows)} rows."
-                })
-
-                # Add result summary to context
-                if rows:
-                    conversation_history.append({
-                        "role": "system",
-                        "content": f"Query returned {len(rows)} rows with columns: {', '.join(columns)}"
-                    })
-            else:
-                # Query failed after retries
-                print("💡 Tip: Try rephrasing your question or being more specific.\n")
-                # Remove failed user query from history
-                if conversation_history and conversation_history[-1]["role"] == "user":
-                    conversation_history.pop()
-
-            # Trim history to prevent token overflow (simplified version - just keep recent messages)
-            # Using a simple approach to trim to last MAX_HISTORY_LENGTH messages plus system prompt
-            if len(conversation_history) > MAX_HISTORY_LENGTH + 1:
-                system_prompt = [conversation_history[0]] if conversation_history and conversation_history[0]["role"] == "system" else []
-                recent_messages = conversation_history[-MAX_HISTORY_LENGTH:]
-                conversation_history = system_prompt + recent_messages
-
-            print()  # Blank line for readability
 
         except KeyboardInterrupt:
             print("\n\n👋 Interrupted. Goodbye!")
@@ -567,7 +544,7 @@ def main() -> None:
 
     # Load environment
     load_dotenv()
-    model = os.getenv("MODEL_NAME", "phi4:latest")
+    model = os.getenv("MODEL_NAME", "gpt-oss:latest")
     base_url = os.getenv("OLLAMA_URL")
     mongo_uri = os.getenv("MONGO_URI", "")
 
@@ -592,7 +569,7 @@ def main() -> None:
 
     # Check Ollama health before starting chat loop
     if not check_ollama_health(base_url):
-        print("⚠️  Warning: Ollama service health check failed.")
+        print("☢\u2005 Warning: Ollama service health check failed.")
         print("   The service may be unreachable. Will attempt connection with retries.")
         print("   If issues persist, check that Ollama is running at:", base_url)
         print()
