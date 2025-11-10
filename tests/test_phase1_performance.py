@@ -26,7 +26,7 @@ class TestStreamingTransformation:
 
     def test_stream_documents_chunks_correctly(self):
         """Test that documents are streamed in correct chunk sizes."""
-        from src.transform.streaming import stream_documents
+        from src.transformation.streaming import stream_documents
 
         # Create mock collection with 250 documents
         mock_collection = Mock()
@@ -44,7 +44,7 @@ class TestStreamingTransformation:
 
     def test_stream_documents_empty_collection(self):
         """Test streaming from empty collection."""
-        from src.transform.streaming import stream_documents
+        from src.transformation.streaming import stream_documents
 
         mock_collection = Mock()
         mock_collection.find.return_value = iter([])
@@ -55,7 +55,7 @@ class TestStreamingTransformation:
 
     def test_upsert_dataframe_creates_table(self):
         """Test that upsert_dataframe creates table if not exists."""
-        from src.transform.streaming import upsert_dataframe
+        from src.transformation.streaming import upsert_dataframe
 
         conn = duckdb.connect(":memory:")
 
@@ -75,7 +75,7 @@ class TestStreamingTransformation:
 
     def test_upsert_dataframe_idempotent(self):
         """Test that upsert is idempotent (no duplicates)."""
-        from src.transform.streaming import upsert_dataframe
+        from src.transformation.streaming import upsert_dataframe
 
         conn = duckdb.connect(":memory:")
 
@@ -95,7 +95,7 @@ class TestStreamingTransformation:
 
     def test_get_collection_stats(self):
         """Test collection statistics calculation."""
-        from src.transform.streaming import get_collection_stats
+        from src.transformation.streaming import get_collection_stats
 
         mock_collection = Mock()
         mock_collection.count_documents.return_value = 1000
@@ -112,7 +112,7 @@ class TestStreamingTransformation:
 
     def test_recommend_chunk_size(self):
         """Test chunk size recommendation based on stats."""
-        from src.transform.streaming import recommend_chunk_size
+        from src.transformation.streaming import recommend_chunk_size
 
         mock_collection = Mock()
         mock_collection.count_documents.return_value = 10000
@@ -133,7 +133,7 @@ class TestConcurrentIngestion:
 
     def test_ingest_batch_concurrent_success(self):
         """Test successful concurrent ingestion."""
-        from src.ingest.concurrent import ingest_batch_concurrent, IngestionResult
+        from src.ingestion.concurrent import ingest_batch_concurrent, IngestionResult
 
         # Mock ingest function that succeeds
         def mock_ingest(ticker, **kwargs):
@@ -155,7 +155,7 @@ class TestConcurrentIngestion:
 
     def test_ingest_batch_concurrent_partial_failure(self):
         """Test concurrent ingestion with some failures."""
-        from src.ingest.concurrent import ingest_batch_concurrent
+        from src.ingestion.concurrent import ingest_batch_concurrent
 
         # Mock ingest function that fails for specific ticker
         def mock_ingest(ticker, **kwargs):
@@ -180,7 +180,7 @@ class TestConcurrentIngestion:
 
     def test_ingest_batch_concurrent_timeout(self):
         """Test timeout handling in concurrent ingestion."""
-        from src.ingest.concurrent import ingest_batch_concurrent
+        from src.ingestion.concurrent import ingest_batch_concurrent
 
         # Mock ingest function that hangs
         def mock_ingest_slow(ticker, **kwargs):
@@ -204,7 +204,7 @@ class TestConcurrentIngestion:
 
     def test_estimate_time_savings(self):
         """Test time savings estimation."""
-        from src.ingest.concurrent import estimate_time_savings
+        from src.ingestion.concurrent import estimate_time_savings
 
         estimate = estimate_time_savings(
             num_tickers=50,

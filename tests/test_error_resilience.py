@@ -13,7 +13,7 @@ import pytest
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from resilience import (
+from src.query.resilience import (
     execute_template,
     get_all_tickers,
     list_templates,

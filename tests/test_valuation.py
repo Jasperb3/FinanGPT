@@ -11,7 +11,7 @@ from transform import (
     prepare_earnings_calendar_dataframe,
     prepare_earnings_history_dataframe,
 )
-from valuation import (
+from src.intelligence.valuation import (
     create_earnings_calendar_view,
     create_earnings_history_table,
     create_valuation_metrics_table,

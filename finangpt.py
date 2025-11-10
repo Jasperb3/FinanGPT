@@ -23,8 +23,8 @@ from typing import Optional
 import duckdb
 from pymongo import MongoClient
 
-from config_loader import load_config
-from time_utils import parse_utc_timestamp
+from src.utils.config import load_config
+from src.utils.time_utils import parse_utc_timestamp
 
 
 def get_status(config_path: Optional[str] = None) -> dict:

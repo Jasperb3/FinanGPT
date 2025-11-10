@@ -1,25 +1,26 @@
 #!/usr/bin/env python3
-"""Shared helpers for dealing with UTC timestamps."""
+"""
+Backward-compatible wrapper for time_utils.py.
 
-from __future__ import annotations
+This file maintains compatibility with legacy scripts and imports.
+New code should import from src.utils.time_utils directly.
 
-import re
-from datetime import UTC, datetime
+DEPRECATED: This wrapper will be removed in a future version.
+"""
+import sys
+import warnings
 
-ISO_OFFSET_PATTERN = re.compile(r"[+-]\d{2}:\d{2}$")
+warnings.warn(
+    "Direct import from time_utils.py is deprecated. "
+    "Use 'from src.utils.time_utils import ...' instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
 
+# Import everything from new location
+from src.utils.time_utils import *
 
-def _normalise_timestamp(value: str) -> str:
-    cleaned = (value or "").strip()
-    if not cleaned:
-        raise ValueError("Missing timestamp value.")
-    if cleaned.endswith("Z"):
-        cleaned = cleaned[:-1]
-    if not ISO_OFFSET_PATTERN.search(cleaned):
-        cleaned = f"{cleaned}+00:00"
-    return cleaned
-
-
-def parse_utc_timestamp(value: str) -> datetime:
-    """Parse an ISO 8601 string (optionally ending with Z) into a UTC datetime."""
-    return datetime.fromisoformat(_normalise_timestamp(value)).astimezone(UTC)
+if __name__ == "__main__":
+    # Maintain CLI compatibility
+    from src.utils.time_utils import main
+    sys.exit(main())

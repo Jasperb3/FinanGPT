@@ -23,7 +23,7 @@ class TestMarketValidators:
 
     def test_global_mode_accepts_all_countries(self):
         """Test that global mode accepts any country."""
-        from src.ingest.validators import validate_instrument, DEFAULT_MARKET_CONFIG
+        from src.ingestion.validators import validate_instrument, DEFAULT_MARKET_CONFIG
 
         # US stock
         us_info = {
@@ -54,7 +54,7 @@ class TestMarketValidators:
 
     def test_us_only_mode_rejects_non_us(self):
         """Test that us_only mode rejects non-US stocks."""
-        from src.ingest.validators import validate_instrument, US_ONLY_MARKET_CONFIG, UnsupportedInstrument
+        from src.ingestion.validators import validate_instrument, US_ONLY_MARKET_CONFIG, UnsupportedInstrument
 
         # US stock - should pass
         us_info = {
@@ -78,7 +78,7 @@ class TestMarketValidators:
 
     def test_etf_detection(self):
         """Test ETF detection across different indicators."""
-        from src.ingest.validators import is_etf
+        from src.ingestion.validators import is_etf
 
         # Detect via quoteType
         assert is_etf({"quoteType": "ETF"}) == True
@@ -94,7 +94,7 @@ class TestMarketValidators:
 
     def test_mutual_fund_detection(self):
         """Test mutual fund detection."""
-        from src.ingest.validators import is_mutualfund
+        from src.ingestion.validators import is_mutualfund
 
         assert is_mutualfund({"quoteType": "MUTUALFUND"}) == True
         assert is_mutualfund({"quoteType": "FUND"}) == True
@@ -102,7 +102,7 @@ class TestMarketValidators:
 
     def test_crypto_detection(self):
         """Test cryptocurrency detection."""
-        from src.ingest.validators import is_crypto
+        from src.ingestion.validators import is_crypto
 
         assert is_crypto({"quoteType": "CRYPTOCURRENCY"}) == True
         assert is_crypto({"quoteType": "CRYPTO"}) == True
@@ -110,7 +110,7 @@ class TestMarketValidators:
 
     def test_custom_config_from_dict(self):
         """Test parsing custom configuration from dict."""
-        from src.ingest.validators import get_market_config_from_dict
+        from src.ingestion.validators import get_market_config_from_dict
 
         config_dict = {
             "mode": "custom",
@@ -131,7 +131,7 @@ class TestMarketValidators:
 
     def test_eu_only_mode(self):
         """Test EU-only market configuration."""
-        from src.ingest.validators import validate_instrument, EU_ONLY_MARKET_CONFIG
+        from src.ingestion.validators import validate_instrument, EU_ONLY_MARKET_CONFIG
 
         # German stock - should pass
         de_stock = {
@@ -456,7 +456,7 @@ class TestGlobalMarketConfiguration:
 
     def test_parse_global_mode(self):
         """Test parsing global mode configuration."""
-        from src.ingest.validators import get_market_config_from_dict
+        from src.ingestion.validators import get_market_config_from_dict
 
         config = get_market_config_from_dict({"mode": "global"})
 
@@ -466,7 +466,7 @@ class TestGlobalMarketConfiguration:
 
     def test_parse_us_only_mode(self):
         """Test parsing us_only mode configuration."""
-        from src.ingest.validators import get_market_config_from_dict
+        from src.ingestion.validators import get_market_config_from_dict
 
         config = get_market_config_from_dict({"mode": "us_only"})
 
@@ -475,7 +475,7 @@ class TestGlobalMarketConfiguration:
 
     def test_parse_custom_mode_empty_lists(self):
         """Test that empty lists in custom mode mean no restrictions."""
-        from src.ingest.validators import get_market_config_from_dict
+        from src.ingestion.validators import get_market_config_from_dict
 
         config = get_market_config_from_dict({
             "mode": "custom",

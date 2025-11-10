@@ -212,5 +212,5 @@ GENERIC_ERROR_MESSAGES = {
 # ============================================================================
 
 APP_NAME = "FinanGPT"
-APP_VERSION = "2.8"
+APP_VERSION = "2.9"
 APP_DESCRIPTION = "AI-Powered Financial Data Analysis Platform"

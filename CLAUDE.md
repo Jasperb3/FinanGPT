@@ -1,17 +1,17 @@
 # CLAUDE.md
 
 **Project**: FinanGPT - AI-Powered Financial Data Analysis Platform
-**Status**: Production-ready (Phase 11 + Enhancement Plan 4 Phases 0-4)
-**Version**: 2.8 (Updated 2025-11-10)
+**Status**: Production-ready (Fully modularized with organized src/ structure)
+**Version**: 2.9 (Updated 2025-11-10)
 
 ## Quick Reference
 
 **Tech Stack**: Python 3.x | MongoDB | DuckDB | Ollama (LLM) | yfinance | SQLite
-**Lines of Code**: ~9,000 Python | 20 core modules
+**Lines of Code**: ~9,200 Python | 35 organized modules
 **Data**: Global markets (12+ currencies, auto-normalized to USD) + US equities
-**Latest**: Phase 11 + Enhancement Plan 4 (Production Hardening, Performance, Reliability & Security)
+**Latest**: Modular architecture with backward compatibility
 
-### Enhancement Plan 4 - Phases 0-3 (NEW)
+### Recent Enhancements
 
 **Phase 0: Emergency Fixes** ✅
 - Fixed duplicate hint augmentation bug in `query.py:844-845`
@@ -765,4 +765,4 @@ python finangpt.py status
 
 ---
 
-*Last Updated: 2025-11-10 | Version 2.8 | Enhancement Plan 4 - Phase 4 Complete: Code Quality Improvements*
+*Last Updated: 2025-11-10 | Version 2.9 | Directory Reorganization Complete: Modular src/ structure with backward compatibility*

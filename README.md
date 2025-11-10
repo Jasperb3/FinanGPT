@@ -58,11 +58,13 @@ An enterprise-grade financial intelligence platform that combines comprehensive 
   - Path traversal prevention (directory whitelisting, path validation)
   - Error message sanitization (generic messages in production, full details in debug)
   - Secure credential management (password masking, connection string sanitization)
-- **Code quality improvements** (NEW Phase 4):
-  - Centralized logging utility (JSON/text format support, consistent configuration)
-  - Constants management (application-wide constants in src/constants.py)
-  - Improved type hints (comprehensive type annotations for better IDE support)
-  - Enhanced code organization (reduced duplication, clearer module structure)
+- **Code quality & organization** (NEW):
+  - **Modular directory structure**: Organized src/ hierarchy by function (ingestion, transformation, query, intelligence)
+  - **Centralized logging**: JSON/text format support with consistent configuration
+  - **Constants management**: Application-wide constants in src/constants.py
+  - **Improved type hints**: Comprehensive type annotations for better IDE support
+  - **Backward compatibility**: Deprecated wrappers maintain compatibility with existing scripts
+  - **Enhanced maintainability**: Reduced duplication, clearer module boundaries
 - **Production hardening**: Duplicate code fixes, optimized imports, enhanced error handling
 
 ---
@@ -1087,42 +1089,69 @@ pytest tests/ --cov=. --cov-report=html
 
 ```
 FinanGPT/
-├── Core Scripts
-│   ├── ingest.py (1445 lines)      # Data fetching
-│   ├── transform.py (815 lines)    # Analytics tables
-│   ├── query.py (730 lines)        # One-shot queries
-│   ├── chat.py (500 lines)         # Conversational interface
-│   └── finangpt.py (420 lines)     # Unified CLI
+├── finangpt.py                        # Unified CLI entry point
+├── config.yaml                        # Configuration file
 │
-├── Enhancement Plan 3 - Phase 1 (Performance)
-│   ├── src/transform/streaming.py (245 lines)
-│   ├── src/ingest/concurrent.py (280 lines)
-│   ├── src/query/cache.py (320 lines)
-│   ├── src/query/validation.py (220 lines)
-│   └── src/utils/progress.py (155 lines)
+├── src/
+│   ├── ingestion/                     # Data ingestion
+│   │   ├── core.py (1445 lines)       # Main ingestion logic
+│   │   ├── concurrent.py (280 lines)  # Parallel processing
+│   │   └── validators.py (360 lines)  # Market validation
+│   │
+│   ├── transformation/                # Data transformation
+│   │   ├── core.py (815 lines)        # Main transformation logic
+│   │   └── streaming.py (245 lines)   # Memory-efficient streaming
+│   │
+│   ├── query/                         # Query execution
+│   │   ├── executor.py (730 lines)    # One-shot query engine
+│   │   ├── chat.py (500 lines)        # Conversational interface
+│   │   ├── resilience.py (306 lines)  # Error handling & templates
+│   │   ├── cache.py (320 lines)       # Query result caching
+│   │   ├── validation.py (220 lines)  # SQL validation
+│   │   ├── history.py (380 lines)     # Query history & favorites
+│   │   └── planner.py (360 lines)     # Query decomposition
+│   │
+│   ├── intelligence/                  # Advanced analytics
+│   │   ├── valuation.py (230 lines)   # Valuation metrics
+│   │   ├── analyst.py (250 lines)     # Analyst intelligence
+│   │   ├── technical.py (175 lines)   # Technical indicators
+│   │   ├── error_handler.py (260 lines)   # Smart error messages
+│   │   └── autocomplete.py (320 lines)    # Suggestion engine
+│   │
+│   ├── visualization/                 # Charts & formatting
+│   │   └── charts.py (463 lines)      # Chart generation
+│   │
+│   ├── data/                          # Data management
+│   │   ├── currency.py (390 lines)    # Currency conversion
+│   │   └── valuation_multicurrency.py (280 lines)  # Multi-FX valuation
+│   │
+│   ├── utils/                         # Utilities
+│   │   ├── config.py (204 lines)      # Configuration loading
+│   │   ├── logging.py (169 lines)     # Centralized logging
+│   │   ├── progress.py (155 lines)    # Progress indicators
+│   │   ├── time_utils.py              # Time utilities
+│   │   ├── date_parser.py (280 lines) # Date parsing
+│   │   └── peer_groups.py (79 lines)  # Peer group definitions
+│   │
+│   └── constants.py (217 lines)       # Application constants
 │
-├── Enhancement Plan 3 - Phase 2 (Global Markets)
-│   ├── src/ingest/validators.py (360 lines)
-│   ├── src/data/currency.py (390 lines)
-│   └── src/data/valuation_multicurrency.py (280 lines)
+├── scripts/                           # Automation scripts
+│   ├── migrate_structure.py           # Directory migration
+│   ├── daily_refresh.sh               # Cron job
+│   └── backfill_fx_rates.py           # Utility scripts
 │
-├── Phase 8-11 Modules
-│   ├── valuation.py (230 lines)
-│   ├── analyst.py (250 lines)
-│   ├── technical.py (175 lines)
-│   ├── query_history.py (380 lines)
-│   ├── error_handler.py (260 lines)
-│   ├── autocomplete.py (320 lines)
-│   ├── date_parser.py (280 lines)
-│   └── query_planner.py (360 lines)
+├── tests/                             # Test suite
+│   ├── test_*.py                      # Unit & integration tests
+│   └── (45 tests passing)
 │
-└── Supporting Modules
-    ├── visualize.py (463 lines)
-    ├── resilience.py (306 lines)
-    ├── config_loader.py (204 lines)
-    └── peer_groups.py (79 lines)
+└── Backward-compatible wrappers (deprecated)
+    ├── ingest.py → src/ingestion/core.py
+    ├── transform.py → src/transformation/core.py
+    ├── query.py → src/query/executor.py
+    ├── chat.py → src/query/chat.py
+    └── (+ 13 other wrappers)
 
-Total: ~8,500 lines | 20 modules
+Total: ~9,200 lines | 35 organized modules
 ```
 
 ---

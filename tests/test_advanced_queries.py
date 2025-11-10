@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from peer_groups import (
+from src.utils.peer_groups import (
     PEER_GROUPS,
     get_peer_group,
     list_peer_groups,

@@ -13,7 +13,7 @@ import pytest
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from visualize import (
+from src.visualization.charts import (
     detect_visualization_intent,
     format_financial_value,
     format_large_number,
