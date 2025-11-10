@@ -1,17 +1,17 @@
 # CLAUDE.md
 
 **Project**: FinanGPT - AI-Powered Financial Data Analysis Platform
-**Status**: Production-ready (Phase 11 + Enhancement Plan 4 Phases 0-2)
-**Version**: 2.6 (Updated 2025-11-10)
+**Status**: Production-ready (Phase 11 + Enhancement Plan 4 Phases 0-3)
+**Version**: 2.7 (Updated 2025-11-10)
 
 ## Quick Reference
 
 **Tech Stack**: Python 3.x | MongoDB | DuckDB | Ollama (LLM) | yfinance | SQLite
-**Lines of Code**: ~8,700 Python | 20 core modules
+**Lines of Code**: ~9,000 Python | 20 core modules
 **Data**: Global markets (12+ currencies, auto-normalized to USD) + US equities
-**Latest**: Phase 11 + Enhancement Plan 4 (Production Hardening, Performance & Ollama Reliability)
+**Latest**: Phase 11 + Enhancement Plan 4 (Production Hardening, Performance, Reliability & Security)
 
-### Enhancement Plan 4 - Phases 0-2 (NEW)
+### Enhancement Plan 4 - Phases 0-3 (NEW)
 
 **Phase 0: Emergency Fixes** ✅
 - Fixed duplicate hint augmentation bug in `query.py:844-845`
@@ -32,6 +32,30 @@
 - **Rate limiting**: Token bucket algorithm with configurable limits (10 req/60s default)
 - **Schema refresh detection**: Automatic cache invalidation on schema changes via SHA-256 hashing
 
+**Phase 3: Security Hardening** ✅
+- **Enhanced SQL injection prevention**:
+  - 15+ dangerous patterns blocked (INSERT, UPDATE, DELETE, DROP, ALTER, UNION, etc.)
+  - SQL comment blocking (-- and /* */)
+  - UNION injection prevention
+  - Obfuscation detection (CHAR(), CHR(), @@)
+  - File operation blocking (INTO OUTFILE, LOAD_FILE)
+- **Input sanitization**:
+  - `sanitize_ticker()` - validates ticker format (alphanumeric, dots, hyphens only, max 10 chars)
+  - `sanitize_tickers_input()` - validates comma-separated tickers
+  - Command injection prevention
+- **Path traversal prevention**:
+  - `validate_file_path()` - validates paths against whitelisted directories
+  - `safe_read_file()` - secure file reading with validation
+  - Blocks directory traversal attempts (../, /etc, /sys)
+- **Error message sanitization**:
+  - `sanitize_error_message()` - generic messages in production
+  - `safe_error_response()` - structured error responses
+  - Full details only in debug mode
+- **Secure credential management**:
+  - `mask_sensitive_value()` - masks passwords/tokens (***last4)
+  - `sanitize_connection_string()` - masks passwords in connection strings
+  - `validate_env_var()` - validates required environment variables
+
 **Configuration** (`config.yaml`):
 ```yaml
 ingestion:
@@ -45,9 +69,18 @@ query:
   cache_max_entries: 100
 
 ollama:
-  rate_limit_requests: 10   # NEW Phase 2: Rate limiting
+  rate_limit_requests: 10   # Phase 2: Rate limiting
   rate_limit_window: 60
-  max_context_tokens: 4000  # NEW Phase 2: Context window management
+  max_context_tokens: 4000  # Phase 2: Context window management
+
+security:                   # NEW Phase 3: Security hardening
+  strict_sql_validation: true
+  allow_comments: false      # Block SQL comments (injection vector)
+  allow_union: false         # Block UNION injections
+  validate_tickers: true
+  validate_file_paths: true
+  sanitize_errors: true      # Generic messages in production
+  debug_mode: false          # Set true for full error details
 ```
 
 ### Core Workflows

@@ -25,6 +25,251 @@ from pymongo.database import Database
 from time_utils import parse_utc_timestamp
 
 # ============================================================================
+# Security: Input Sanitization
+# ============================================================================
+
+def sanitize_ticker(ticker: str) -> str:
+    """
+    Validate and sanitize ticker symbol to prevent command injection.
+
+    Args:
+        ticker: Raw ticker symbol input
+
+    Returns:
+        Sanitized ticker symbol (uppercase)
+
+    Raises:
+        ValueError: If ticker format is invalid
+    """
+    if not ticker:
+        raise ValueError("Ticker cannot be empty")
+
+    # Allow only alphanumeric, dots, hyphens (standard ticker formats)
+    if not re.match(r'^[A-Z0-9.\-]+$', ticker, re.IGNORECASE):
+        raise ValueError(f"Invalid ticker format: {ticker}. Only alphanumeric, dots, and hyphens allowed.")
+
+    # Max length check (typical tickers are 1-10 chars)
+    if len(ticker) > 10:
+        raise ValueError(f"Ticker too long: {ticker} (max 10 characters)")
+
+    return ticker.upper()
+
+
+def sanitize_tickers_input(tickers_str: str) -> list:
+    """
+    Sanitize comma-separated tickers string.
+
+    Args:
+        tickers_str: Comma-separated ticker symbols
+
+    Returns:
+        List of sanitized ticker symbols
+    """
+    if not tickers_str:
+        return []
+
+    tickers = [t.strip() for t in tickers_str.split(',')]
+    return [sanitize_ticker(t) for t in tickers if t]
+
+
+# ============================================================================
+# Security: Path Traversal Prevention
+# ============================================================================
+
+def validate_file_path(file_path: str, allowed_dirs: list = None) -> Path:
+    """
+    Validate file path to prevent path traversal attacks.
+
+    Args:
+        file_path: File path to validate
+        allowed_dirs: List of allowed directory paths (optional)
+
+    Returns:
+        Validated Path object
+
+    Raises:
+        ValueError: If path is invalid or outside allowed directories
+    """
+    if not file_path:
+        raise ValueError("File path cannot be empty")
+
+    # Convert to Path object and resolve
+    try:
+        path = Path(file_path).resolve()
+    except (OSError, RuntimeError) as e:
+        raise ValueError(f"Invalid file path: {e}")
+
+    # Check for path traversal attempts
+    if '..' in file_path or file_path.startswith('/etc') or file_path.startswith('/sys'):
+        raise ValueError(f"Path traversal detected: {file_path}")
+
+    # Validate against allowed directories
+    if allowed_dirs:
+        allowed_paths = [Path(d).resolve() for d in allowed_dirs]
+        if not any(str(path).startswith(str(allowed)) for allowed in allowed_paths):
+            raise ValueError(f"Path not in allowed directories: {file_path}")
+
+    # Ensure it's a file (not directory)
+    if path.exists() and not path.is_file():
+        raise ValueError(f"Path is not a file: {file_path}")
+
+    return path
+
+
+def safe_read_file(file_path: str, allowed_dirs: list = None) -> str:
+    """
+    Safely read file contents with path validation.
+
+    Args:
+        file_path: File path to read
+        allowed_dirs: List of allowed directories
+
+    Returns:
+        File contents as string
+
+    Raises:
+        ValueError: If path validation fails
+        FileNotFoundError: If file doesn't exist
+    """
+    validated_path = validate_file_path(file_path, allowed_dirs)
+
+    if not validated_path.exists():
+        raise FileNotFoundError(f"File not found: {file_path}")
+
+    with open(validated_path, 'r', encoding='utf-8') as f:
+        return f.read()
+
+
+# ============================================================================
+# Security: Error Message Sanitization
+# ============================================================================
+
+def sanitize_error_message(error: Exception, debug_mode: bool = False) -> str:
+    """
+    Sanitize error messages to prevent information disclosure.
+
+    Args:
+        error: Exception to sanitize
+        debug_mode: If True, return full error details
+
+    Returns:
+        Sanitized error message
+    """
+    if debug_mode:
+        # In debug mode, return full details
+        return f"{type(error).__name__}: {str(error)}"
+
+    # Production mode: generic messages
+    error_type = type(error).__name__
+
+    # Map specific errors to safe generic messages
+    generic_messages = {
+        'FileNotFoundError': "File not found. Please check the file path.",
+        'PermissionError': "Permission denied. Please check file permissions.",
+        'ValueError': "Invalid input provided. Please check your query.",
+        'ConnectionError': "Database connection error. Please try again later.",
+        'TimeoutError': "Request timed out. Please try again.",
+        'OllamaConnectionError': "AI service is temporarily unavailable.",
+        'OllamaTimeoutError': "AI service request timed out.",
+        'OllamaResponseError': "AI service returned an invalid response.",
+        'SQLExtractionError': "Could not generate SQL query. Please rephrase your question.",
+        'SemanticValidationError': "Query doesn't match question intent. Please clarify.",
+    }
+
+    return generic_messages.get(error_type, "An error occurred. Please try again or contact support.")
+
+
+def safe_error_response(error: Exception, debug_mode: bool = False) -> dict:
+    """
+    Create a safe error response dictionary.
+
+    Args:
+        error: Exception to format
+        debug_mode: If True, include full error details
+
+    Returns:
+        Error response dictionary
+    """
+    response = {
+        'success': False,
+        'error': sanitize_error_message(error, debug_mode),
+        'error_type': type(error).__name__
+    }
+
+    if debug_mode:
+        import traceback
+        response['traceback'] = traceback.format_exc()
+
+    return response
+
+
+# ============================================================================
+# Security: Credential Management
+# ============================================================================
+
+def mask_sensitive_value(value: str, show_chars: int = 4) -> str:
+    """
+    Mask sensitive values for logging/display.
+
+    Args:
+        value: Sensitive value to mask
+        show_chars: Number of characters to show at end
+
+    Returns:
+        Masked value (e.g., "***abc123")
+    """
+    if not value or len(value) <= show_chars:
+        return "***"
+
+    return "*" * (len(value) - show_chars) + value[-show_chars:]
+
+
+def validate_env_var(var_name: str, required: bool = True) -> str:
+    """
+    Safely load environment variable with validation.
+
+    Args:
+        var_name: Environment variable name
+        required: If True, raise error if not found
+
+    Returns:
+        Environment variable value
+
+    Raises:
+        ValueError: If required variable is missing
+    """
+    value = os.getenv(var_name)
+
+    if required and not value:
+        raise ValueError(f"Required environment variable not set: {var_name}")
+
+    return value or ""
+
+
+def sanitize_connection_string(conn_str: str) -> str:
+    """
+    Mask password in connection string for safe logging.
+
+    Args:
+        conn_str: Database connection string
+
+    Returns:
+        Connection string with password masked
+    """
+    if not conn_str:
+        return ""
+
+    # Pattern for MongoDB connection strings
+    # mongodb://user:password@host:port/db -> mongodb://user:***@host:port/db
+    pattern = r'(mongodb(?:\+srv)?://[^:]+:)([^@]+)(@.+)'
+
+    def mask_password(match):
+        return f"{match.group(1)}***{match.group(3)}"
+
+    return re.sub(pattern, mask_password, conn_str)
+
+
+# ============================================================================
 # Exception Hierarchy
 # ============================================================================
 
@@ -715,9 +960,24 @@ def validate_sql(
     if main_select_idx == -1:
         raise ValueError("Only SELECT statements are permitted.")
     cte_names = extract_cte_names(cleaned, main_select_idx)
-    disallowed = ("insert", "update", "delete", "drop", "alter", "create", "replace", "grant", "revoke", "truncate")
-    if any(re.search(rf"\b{word}\b", cleaned_lower) for word in disallowed):
-        raise ValueError("Detected non-read-only SQL.")
+    # Phase 3: Enhanced SQL injection prevention
+    # Block dangerous keywords (case-insensitive, accounts for obfuscation)
+    dangerous_patterns = [
+        r'\bINSERT\b', r'\bUPDATE\b', r'\bDELETE\b', r'\bDROP\b',
+        r'\bALTER\b', r'\bCREATE\b', r'\bTRUNCATE\b', r'\bGRANT\b',
+        r'\bREVOKE\b', r'\bEXECUTE\b', r'\bEXEC\b', r'\bREPLACE\b',
+        r'\bXP_\b', r'\bSP_\b',  # SQL Server stored procedures
+        r'--',  # SQL comments (injection vector)
+        r'/\*', r'\*/',  # Multi-line comments
+        r'\bUNION\b.*\bSELECT\b',  # UNION injection
+        r'\bINTO\s+OUTFILE\b',  # File operations
+        r'\bLOAD_FILE\b',  # MySQL file operations
+        r'@@', r'CHAR\(', r'CHR\(',  # Obfuscation techniques
+    ]
+
+    for pattern in dangerous_patterns:
+        if re.search(pattern, cleaned, re.IGNORECASE):
+            raise ValueError(f"Disallowed SQL pattern detected: {pattern}")
     table_refs = extract_table_identifiers(cleaned)
     allowed_tables = {name.lower() for name in schema.keys()}
     cte_allow = {name.lower() for name in cte_names}
