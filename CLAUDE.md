@@ -1,8 +1,8 @@
 # CLAUDE.md
 
 **Project**: FinanGPT - AI-Powered Financial Data Analysis Platform
-**Status**: Production-ready (Phase 11 + Enhancement Plan 4 Phases 0-3)
-**Version**: 2.7 (Updated 2025-11-10)
+**Status**: Production-ready (Phase 11 + Enhancement Plan 4 Phases 0-4)
+**Version**: 2.8 (Updated 2025-11-10)
 
 ## Quick Reference
 
@@ -726,6 +726,8 @@ PRICE_LOOKBACK_DAYS      # Override ingestion.price_lookback_days
 - `autocomplete.py` - Phase 11: Suggestions engine
 - `date_parser.py` - Phase 11: Enhanced date parsing
 - `query_planner.py` - Phase 11: Query decomposition
+- `src/constants.py` - Enhancement Plan 4 Phase 4: Application-wide constants
+- `src/utils/logging.py` - Enhancement Plan 4 Phase 4: Centralized logging utility
 
 ### Configuration
 - `config.yaml` - Settings (env var override)
@@ -763,4 +765,4 @@ python finangpt.py status
 
 ---
 
-*Last Updated: 2025-11-09 | Version 2.4 | Phase 11 Complete: Query Intelligence & UX Enhancement*
+*Last Updated: 2025-11-10 | Version 2.8 | Enhancement Plan 4 - Phase 4 Complete: Code Quality Improvements*
