@@ -618,6 +618,8 @@ def build_system_prompt(schema: Mapping[str, Sequence[str]]) -> str:
                 "Use `ratios.financial` for capital-efficiency metrics such as roe, roa, net_margin, gross_margin, "
                 "ebitda_margin, debt_ratio, asset_turnover, fcf_margin, and cash_conversion."
             )
+    if "company.metadata" in schema:
+        guidance.append("Use `company.metadata` for company information: ticker, longName, sector, industry, website, country, exchange, marketCap, employees. Join on ticker to filter by sector/industry.")
     if "company.peers" in schema:
         guidance.append("Join `company.peers` when the query references industries or peer groups (FAANG, SEMICONDUCTORS, etc.).")
     if any(table.startswith("analyst.") for table in schema.keys()):
@@ -658,6 +660,7 @@ Examples:
 Valuation Metrics (valuation.metrics table):
 Ratios: pe_ratio, pb_ratio, ps_ratio, peg_ratio, dividend_yield, payout_ratio
 Classifications: cap_class (Large Cap, Mid Cap, Small Cap)
+JOIN with company.metadata on ticker for company names, sector, industry
 
 Earnings Intelligence (earnings.history table):
 Fields: eps_estimate, eps_actual, eps_surprise, surprise_pct, revenue_estimate, revenue_actual
@@ -666,7 +669,8 @@ Earnings Calendar (earnings.calendar and earnings.calendar_upcoming tables):
 Fields: earnings_date, period_ending, estimate
 
 Examples:
-- "Find undervalued tech stocks with P/E < 15" → SELECT * FROM valuation.metrics WHERE pe_ratio < 15
+- "Find tech stocks with P/E < 20" → SELECT v.ticker, m.longName, v.pe_ratio FROM valuation.metrics v JOIN company.metadata m ON v.ticker = m.ticker WHERE m.sector = 'Technology' AND v.pe_ratio < 20
+- "Show undervalued stocks" → SELECT * FROM valuation.metrics WHERE pe_ratio < 15
 - "Show stocks that beat earnings" → SELECT * FROM earnings.history WHERE eps_surprise > 0
 - "Upcoming earnings this week" → SELECT * FROM earnings.calendar_upcoming WHERE earnings_date <= CURRENT_DATE + 7
 """
@@ -753,8 +757,12 @@ Advanced SQL Features Allowed:
     rules_block = "\n".join(f"- {rule}" for rule in rules)
 
     return (
-        "You are FinanGPT, a disciplined financial data analyst that writes safe DuckDB SQL.\n"
-        f"Schema snapshot:\n{schema_block}\n\n"
+        "You are a SQL code generator. Your ONLY job is to output SQL queries.\n\n"
+        "=== CRITICAL INSTRUCTION ===\n"
+        "RESPOND WITH ONLY SQL CODE. NO EXPLANATIONS. NO TABLES. NO PROSE.\n"
+        "Format: ```sql\\nYOUR_QUERY_HERE\\n```\n"
+        "========================\n\n"
+        f"Available Tables:\n{schema_block}\n\n"
         f"{table_guidance}"
         f"{date_context}\n"
         f"{peer_groups_info}\n"
@@ -762,8 +770,14 @@ Advanced SQL Features Allowed:
         f"{analyst_intelligence_info}\n"
         f"{technical_analysis_info}\n"
         f"{advanced_sql}\n"
-        f"Rules:\n{rules_block}\n"
-        "Output only SQL, optionally wrapped in ```sql``` fences."
+        f"SQL Rules:\n{rules_block}\n\n"
+        "=== OUTPUT TEMPLATE ===\n"
+        "```sql\n"
+        "SELECT ...\n"
+        "FROM ...\n"
+        "WHERE ...\n"
+        "```\n"
+        "========================\n"
     )
 
 
@@ -865,31 +879,53 @@ def extract_sql(text: str) -> str:
         if sql:
             return sql
 
-    # Strategy 2: Generic code block
-    code_block = re.search(r"```\s*(SELECT\b.*?)```", text, re.IGNORECASE | re.DOTALL)
+    # Strategy 2: Generic code block with SELECT/WITH
+    code_block = re.search(r"```\s*((SELECT|WITH)\b.*?)```", text, re.IGNORECASE | re.DOTALL)
     if code_block:
         sql = code_block.group(1).strip()
         if sql:
             return sql
 
-    # Strategy 3: SELECT statement anywhere in text
-    select_match = re.search(r"(SELECT\b.*?)(?:\n\n|$)", text, re.IGNORECASE | re.DOTALL)
+    # Strategy 3: SELECT statement anywhere in text (greedy match until semicolon, LIMIT, or end)
+    select_match = re.search(
+        r"(SELECT\b.*?)(?:;|\n\n|\Z)",
+        text,
+        re.IGNORECASE | re.DOTALL
+    )
     if select_match:
         sql = select_match.group(1).strip()
-        if sql:
+        # Make sure we got actual SQL, not just the word SELECT in prose
+        if sql and len(sql) > 20 and 'FROM' in sql.upper():
             return sql
 
     # Strategy 4: Look for WITH clause (CTE)
-    with_match = re.search(r"(WITH\b.*?SELECT\b.*?)(?:\n\n|$)", text, re.IGNORECASE | re.DOTALL)
+    with_match = re.search(
+        r"(WITH\b.*?SELECT\b.*?)(?:;|\n\n|\Z)",
+        text,
+        re.IGNORECASE | re.DOTALL
+    )
     if with_match:
         sql = with_match.group(1).strip()
+        if sql and 'FROM' in sql.upper():
+            return sql
+
+    # Strategy 5: Look for SQL keywords in sequence (last resort)
+    # Match: SELECT ... FROM ... (optional WHERE/ORDER BY/LIMIT)
+    sql_pattern = re.search(
+        r"(SELECT\s+.+?\s+FROM\s+[\w.]+(?:\s+(?:JOIN|WHERE|GROUP BY|ORDER BY|LIMIT|HAVING).+?)*?)(?:;|\n\n|\Z)",
+        text,
+        re.IGNORECASE | re.DOTALL
+    )
+    if sql_pattern:
+        sql = sql_pattern.group(1).strip()
         if sql:
             return sql
 
     # All strategies failed
     raise SQLExtractionError(
         f"Could not extract SQL from LLM response. "
-        f"Response preview: {text[:200]}..."
+        f"The LLM may have returned formatted results instead of SQL. "
+        f"Response preview: {text[:300]}..."
     )
 
 
@@ -949,7 +985,14 @@ def validate_sql(
 ) -> str:
     if not sql:
         raise ValueError("SQL cannot be empty.")
-    cleaned = re.sub(r"\s+", " ", sql.strip())
+
+    # Strip SQL comments first (LLM-generated comments are safe after extraction)
+    # Remove single-line comments (-- ...)
+    sql_no_comments = re.sub(r'--[^\n]*', '', sql)
+    # Remove multi-line comments (/* ... */)
+    sql_no_comments = re.sub(r'/\*.*?\*/', '', sql_no_comments, flags=re.DOTALL)
+
+    cleaned = re.sub(r"\s+", " ", sql_no_comments.strip())
     cleaned_lower = cleaned.lower()
     if cleaned_lower.count(";") > 1 or (";" in cleaned[:-1] and not cleaned.endswith(";")):
         raise ValueError("Only single-statement SQL is allowed.")
@@ -967,8 +1010,6 @@ def validate_sql(
         r'\bALTER\b', r'\bCREATE\b', r'\bTRUNCATE\b', r'\bGRANT\b',
         r'\bREVOKE\b', r'\bEXECUTE\b', r'\bEXEC\b', r'\bREPLACE\b',
         r'\bXP_\b', r'\bSP_\b',  # SQL Server stored procedures
-        r'--',  # SQL comments (injection vector)
-        r'/\*', r'\*/',  # Multi-line comments
         r'\bUNION\b.*\bSELECT\b',  # UNION injection
         r'\bINTO\s+OUTFILE\b',  # File operations
         r'\bLOAD_FILE\b',  # MySQL file operations
@@ -1217,6 +1258,7 @@ def _fallback_summary(question: str, columns: Sequence[str], rows: Sequence[Sequ
 
 
 def augment_question_with_hints(question: str) -> str:
+    """Augment user question with helpful hints AND enforce SQL-only response."""
     hints: List[str] = []
     lowered = question.lower()
     if any(keyword in lowered for keyword in ("analyst", "price target", "price targets", "recommendation", "consensus")):
@@ -1248,9 +1290,10 @@ def augment_question_with_hints(question: str) -> str:
             "LAG() over the past N quarters (`WHERE ticker = '<TICKER>' AND report_date >= current_date - INTERVAL '2' YEAR`)."
         )
     if not hints:
-        return question
+        # Even without hints, enforce SQL-only response
+        return f"{question}\n\n[REMINDER: Output ONLY SQL code in ```sql``` fences. NO explanations.]"
     helper_block = "\n".join(f"- {hint}" for hint in hints)
-    return f"{question}\n\nHelper Notes:\n{helper_block}"
+    return f"{question}\n\nHelper Notes:\n{helper_block}\n\n[REMINDER: Output ONLY SQL code in ```sql``` fences. NO explanations.]"
 
 
 def main() -> None:
