@@ -83,6 +83,32 @@ query:
   chart_output_dir: charts/
   export_formats: [csv, json, excel, parquet]  # Added parquet
 
+# Phase 3: Security hardening
+security:
+  # SQL injection prevention
+  strict_sql_validation: true      # Enable enhanced SQL injection prevention
+  allow_comments: false            # Block SQL comments (-- and /* */)
+  allow_union: false               # Block UNION injections
+
+  # Input sanitization
+  validate_tickers: true           # Sanitize ticker symbols
+  max_ticker_length: 10            # Maximum ticker symbol length
+
+  # Path traversal prevention
+  validate_file_paths: true        # Enable path validation
+  allowed_directories:             # Allowed directories for file operations
+    - "."                          # Current directory
+    - "charts"                     # Chart output directory
+    - "logs"                       # Log directory
+
+  # Error message sanitization
+  sanitize_errors: true            # Sanitize error messages in production
+  debug_mode: false                # Set to true for full error details (development only)
+
+  # Credential management
+  mask_credentials_in_logs: true   # Mask passwords/tokens in logs
+  require_env_vars: true           # Validate required environment variables
+
 features:
   conversational_mode: true
   auto_error_recovery: true
