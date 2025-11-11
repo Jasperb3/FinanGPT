@@ -1,0 +1,4 @@
+# file: /home/j/coding/finance/finai/financial_data_app_IV/src/query/cache.py
+# hypothesis_version: 6.147.0
+
+[0.0, 100, 300, 1000, 'avg_latency_ms', 'debug', 'entries', 'hit_rate_pct', 'hits', 'last_updated', 'latency_samples', 'latency_total', 'max_entries', 'misses', 'tickers', 'total_requests', 'ttl_seconds', 'utf-8', 'utilization_pct', '🚀 Cache hit!']

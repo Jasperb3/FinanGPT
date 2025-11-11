@@ -1,0 +1,4 @@
+# file: /home/j/coding/finance/finai/financial_data_app_IV/src/transform/streaming.py
+# hypothesis_version: 6.147.0
+
+[100, 500, 1000, 1024, 5000, '$sample', 'avg_size_bytes', 'count', 'date', 'estimated_memory_mb', 'size', 'ticker']

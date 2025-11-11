@@ -1,0 +1,4 @@
+# file: /home/j/coding/finance/finai/financial_data_app_IV/src/data/currency.py
+# hypothesis_version: 6.147.0
+
+['AUD', 'CAD', 'CHF', 'CNY', 'Close', 'EUR', 'GBP', 'HKD', 'INR', 'JPY', 'KRW', 'SGD', 'USD', 'base_currency', 'date', 'date_range_end', 'date_range_start', 'pairs', 'quote_currency', 'rate', 'source', 'total_rates', 'yfinance']

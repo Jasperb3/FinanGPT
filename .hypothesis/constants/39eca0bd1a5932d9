@@ -1,0 +1,4 @@
+# file: /home/j/coding/finance/finai/financial_data_app_IV/src/ingest/concurrent.py
+# hypothesis_version: 6.147.0
+
+[1.1, 5.0, 120, 1000, 'concurrent_time_sec', 'failed', 'sequential_time_sec', 'skipped', 'speedup', 'success', 'time_saved_minutes', 'time_saved_sec']

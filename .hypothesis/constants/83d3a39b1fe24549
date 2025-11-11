@@ -1,0 +1,4 @@
+# file: /home/j/coding/finance/finai/financial_data_app_IV/chat.py
+# hypothesis_version: 6.147.0
+
+[4000, 'FINANGPT_DATA_DIR', 'MAX_HISTORY_LENGTH', 'MAX_RETRIES', '__main__', 'call_ollama_chat', 'data', 'duckdb', 'main', 'print_help', 'requests', 'role', 'system']

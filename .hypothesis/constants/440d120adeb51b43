@@ -1,0 +1,4 @@
+# file: /home/j/coding/finance/finai/financial_data_app_IV/src/core/config_loader.py
+# hypothesis_version: 6.147.0
+
+[100, 365, 'INFO', 'MODEL_NAME', 'MONGO_URI', 'OLLAMA_URL', 'PRICE_LOOKBACK_DAYS', 'auto_error_recovery', 'batch_size', 'chart_output_dir', 'charts/', 'config.yaml', 'conversational_mode', 'csv', 'database', 'default_limit', 'directory', 'duckdb_path', 'excel', 'export_formats', 'features', 'format', 'ingestion', 'json', 'level', 'logging', 'logs/', 'max_limit', 'max_retries', 'model', 'mongo_uri', 'ollama', 'phi4:latest', 'portfolio_tracking', 'price_lookback_days', 'query', 'query_suggestions', 'r', 'retry_backoff', 'timeout', 'url', 'utf-8']

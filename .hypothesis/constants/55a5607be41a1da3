@@ -1,0 +1,4 @@
+# file: /home/j/coding/finance/finai/financial_data_app_IV/src/utils/paths.py
+# hypothesis_version: 6.147.0
+
+[1000, '*', '.jpeg', '.jpg', '.png', '.svg', 'DuckDB database', 'FINANGPT_DATA_DIR', 'Migrated %s to %s', 'cache_metrics.json', 'charts', 'data', 'data_dir', 'duckdb_path', 'get', 'logs', 'paths', 'query', 'query_history.db', 'tmp', 'visualization']

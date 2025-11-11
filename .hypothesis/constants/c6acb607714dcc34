@@ -1,0 +1,4 @@
+# file: /home/j/coding/finance/finai/financial_data_app_IV/src/ui/error_handler.py
+# hypothesis_version: 6.147.0
+
+[0.5, '5 years', 'Dividend payments', 'FROM\\s+([\\w.]+)', 'Growth forecasts', 'Peer group mappings', 'Portfolio holdings', 'Stock splits', 'Table', 'UNKNOWN', 'Unknown table', '\\b([A-Z]{1,5})\\b', 'analyst.consensus', 'column', 'company.metadata', 'company.peers', 'date', 'dividends.history', 'division by zero', 'earnings.calendar', 'earnings.history', 'empty', 'financials.annual', 'financials.quarterly', 'growth.annual', 'last', 'limit', 'no data', 'not found', 'parser', 'prices.daily', 'ratios.financial', 'splits.history', 'syntax', 'table', 'technical.indicators', 'ticker', 'too many', 'unknown', 'user.portfolios', 'valuation.metrics']

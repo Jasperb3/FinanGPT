@@ -1,0 +1,4 @@
+# file: /home/j/coding/finance/finai/financial_data_app_IV/src/ingest/validators.py
+# hypothesis_version: 6.147.0
+
+[' ETF', 'Austria', 'Belgium', 'CHF', 'COMMONSTOCK', 'COMMON_STOCK', 'CRYPTO', 'CRYPTOCURRENCY', 'DKK', 'Denmark', 'EQUITY', 'ETF', 'EUR', 'FUND', 'Finland', 'France', 'GBP', 'Germany', 'Ireland', 'Italy', 'MUTUALFUND', 'NOK', 'Netherlands', 'Norway', 'SEK', 'STOCK', 'Spain', 'Sweden', 'US', 'USA', 'USD', 'United Kingdom', 'United States', 'Unknown', 'allowed_countries', 'allowed_currencies', 'allowed_exchanges', 'country', 'currency', 'custom', 'eu_only', 'exchange', 'exclude_crypto', 'exclude_etfs', 'exclude_mutualfunds', 'financialCurrency', 'fundFamily', 'global', 'isETF', 'isEtf', 'longName', 'mode', 'quoteType', 'symbol', 'true', 'us_only']

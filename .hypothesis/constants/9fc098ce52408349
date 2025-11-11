@@ -1,0 +1,4 @@
+# file: /home/j/coding/finance/finai/financial_data_app_IV/src/core/peer_groups.py
+# hypothesis_version: 6.147.0
+
+['AAL', 'AAPL', 'ABBV', 'AMD', 'AMZN', 'AVGO', 'AXP', 'Airlines', 'BA', 'BAC', 'BMY', 'BP', 'Banks', 'C', 'CMCSA', 'COP', 'COST', 'CRM', 'CVX', 'Cloud Computing', 'DAL', 'DIS', 'Defense', 'E-commerce', 'EBAY', 'ETSY', 'Electric Vehicles', 'F', 'FAANG', 'GD', 'GM', 'GOOGL', 'GS', 'HD', 'IBM', 'INTC', 'JBLU', 'JNJ', 'JPM', 'LCID', 'LLY', 'LMT', 'LOW', 'LUV', 'MA', 'MELI', 'META', 'MRK', 'MS', 'MSFT', 'MU', 'Magnificent Seven', 'NFLX', 'NOC', 'NVDA', 'ORCL', 'Oil & Gas', 'PARA', 'PFE', 'PINS', 'PYPL', 'Payment Processors', 'Pharma', 'QCOM', 'RDDT', 'RIVN', 'RTX', 'Retail', 'SHEL', 'SHOP', 'SLB', 'SNAP', 'SQ', 'Semiconductors', 'Social Media', 'Streaming', 'T', 'TGT', 'TMUS', 'TSLA', 'TSM', 'TWTR', 'Telecom', 'UAL', 'V', 'VZ', 'WBD', 'WFC', 'WMT', 'XOM']

@@ -1,0 +1,4 @@
+# file: /home/j/coding/finance/finai/financial_data_app_IV/ingest.py
+# hypothesis_version: 6.147.0
+
+['FINANGPT_DATA_DIR', '__main__', 'data', 'get_last_fetch_info', 'get_last_price_date', 'is_data_stale', 'main', 'should_skip_ticker']

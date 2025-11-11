@@ -1,0 +1,4 @@
+# file: /home/j/coding/finance/finai/financial_data_app_IV/src/ui/chat.py
+# hypothesis_version: 6.147.0
+
+[1000, 4000, '\n💡 Try asking:', '\n💬 How to use:', '\n📈 Visualization:', '\n📝 Commands:', '\n📝 Special Commands:', '\n🔍 Tips:', '-', '--debug', '/', '/clear', '/exit', '/favorite ', '/favorites', '/help', '/history', '/quit', '/recall ', '500', '=', 'MODEL_NAME', 'MONGO_URI', 'OLLAMA_URL', 'QueryCache', '__main__', 'assistant', 'chat', 'chat.end', 'chat.error', 'chat.start', 'content', 'freshness_info', 'gpt-oss:latest', 'is_stale', 'ok', 'query.error', 'query.network_error', 'query.success', 'role', 'skipped', 'status', 'store_true', 'system', 'unknown', 'user', 'user_query', '💬 Query> ']

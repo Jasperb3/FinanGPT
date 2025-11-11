@@ -1,0 +1,4 @@
+# file: /home/j/coding/finance/finai/financial_data_app_IV/src/ui/autocomplete.py
+# hypothesis_version: 6.147.0
+
+['Add company names', 'Banks', 'Cloud Computing', 'Export to CSV', 'FAANG', 'Filter by date range', 'Magnificent Seven', 'Plot as chart', 'Query Suggestions', 'Semiconductors', 'Show RSI indicator', 'Show more details', 'Show profit margins', 'Unknown', '\\b([A-Z]{2,5})\\b', 'analyze', 'close', 'compare', 'date', 'description', 'display', 'earnings', 'example', 'find', 'industry', 'last month', 'last quarter', 'last year', 'name', 'price', 'revenue', 'sector', 'show', 'ticker', 'time', 'timestamp', 'top', 'type', 'valuation', 'year to date', 'ytd']

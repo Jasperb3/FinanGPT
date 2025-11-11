@@ -1,0 +1,4 @@
+# file: /home/j/coding/finance/finai/financial_data_app_IV/src/utils/logging.py
+# hypothesis_version: 6.147.0
+
+[1024, '%(message)s', '%Y-%m-%d %H:%M:%S', 'INFO', 'args', 'backup_count', 'console_output', 'created', 'directory', 'exc_info', 'exc_text', 'exception', 'filename', 'format', 'funcName', 'info', 'json', 'level', 'levelname', 'levelno', 'lineno', 'logger', 'logging', 'logs', 'max_file_size_mb', 'message', 'module', 'msecs', 'msg', 'name', 'pathname', 'process', 'processName', 'relativeCreated', 'stack_info', 'thread', 'threadName', 'timestamp', 'utf-8']

@@ -1,0 +1,4 @@
+# file: /home/j/coding/finance/finai/financial_data_app_IV/resilience.py
+# hypothesis_version: 6.147.0
+
+['\nSQL> ', '\nSelect [1/2/3]: ', '\nTemplate name> ', '\n💡 Fallback options:', '1', '2', '> ', 'No SQL provided.', 'debug_log', 'defaults', 'execute_template', 'get_all_tickers', 'list_templates', 'load_query_templates', 'params', 'sql', 'suggest_tickers', 'validate_ticker']

@@ -1,0 +1,4 @@
+# file: /home/j/coding/finance/finai/financial_data_app_IV/src/core/time_utils.py
+# hypothesis_version: 6.147.0
+
+['Z', '[+-]\\d{2}:\\d{2}$']

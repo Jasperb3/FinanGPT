@@ -26,6 +26,7 @@ from pymongo.database import Database
 
 from src.core.time_utils import parse_utc_timestamp
 from src.core.config_loader import load_config
+from src.core.peer_groups import PEER_GROUPS
 from src.utils.paths import get_duckdb_path
 
 # Import centralized logging
@@ -746,6 +747,29 @@ def build_system_prompt(schema: Mapping[str, Sequence[str]]) -> str:
 *   "year to date" or "YTD" → `WHERE YEAR(date) = {today.year}`
 """
 
+    # Peer groups overview
+    peer_groups_block = """
+**Peer Groups Reference:**
+
+The system understands named peer groups for quick comparisons. Examples include:
+*   **FAANG** = {', '.join(PEER_GROUPS.get('FAANG', []))}
+*   **Semiconductors** (AMD, NVDA, INTC, ASML, TSM)
+*   **Magnificent Seven** (AAPL, AMZN, GOOGL, MSFT, META, NVDA, TSLA)
+
+Use `company.peers` to join tickers to peer groups: `JOIN company.peers AS p ON fact.ticker = p.ticker` and filter with `p.peer_group = 'FAANG'`.
+"""
+
+    # Window/analytical functions cheat-sheet
+    window_functions = """
+**Window & Analytical Functions:**
+
+*   `ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ...)` – enumerate rows within a partition.
+*   `RANK()` / `DENSE_RANK()` – produce rankings with ties.
+*   `LAG()` / `LEAD()` – access prior/next rows for growth calculations.
+*   Aggregates like `AVG()`, `SUM()`, `MIN()`, `MAX()` and `STDDEV()` are often paired with `GROUP BY`.
+*   Use window clauses such as `PARTITION BY ticker ORDER BY date` for time-series comparisons.
+"""
+
     # Common query patterns and examples
     query_patterns = """
 **Common Query Patterns & Examples:**
@@ -822,6 +846,8 @@ def build_system_prompt(schema: Mapping[str, Sequence[str]]) -> str:
         f"**DATABASE SCHEMA (DuckDB):**\n{schema_block}\n\n"
         f"{detailed_descriptions}\n"
         f"{date_context}\n"
+        f"{peer_groups_block}\n"
+        f"{window_functions}\n"
         f"{query_patterns}\n"
         f"{rules_and_pitfalls}"
         "════════════════════════════════════════════════════════════════\n\n"
