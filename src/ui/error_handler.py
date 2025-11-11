@@ -10,6 +10,7 @@ import re
 from typing import Optional, List, Tuple
 from difflib import get_close_matches
 import duckdb
+from src.query_engine.query import SemanticValidationError
 
 
 class SmartErrorHandler:
@@ -72,6 +73,9 @@ class SmartErrorHandler:
             Enhanced error message
         """
         error_str = str(error)
+
+        if isinstance(error, SemanticValidationError):
+            return self._handle_semantic_error(str(error))
 
         # Table not found
         if "not on the allow-list" in error_str or "Table" in error_str and "not found" in error_str:
@@ -358,3 +362,13 @@ def suggest_alternative_query(user_query: str, error: Exception) -> Optional[str
             return modified
 
     return None
+    def _handle_semantic_error(self, message: str) -> str:
+        """Provide user-friendly semantic validation guidance."""
+
+        return (
+            f"❌ Semantic validation failed: {message}\n\n"
+            "💡 Fix tips:\n"
+            "   • Verify GROUP BY clauses cover all non-aggregated columns\n"
+            "   • Qualify columns when joining tables (e.g., prices.ticker)\n"
+            "   • Avoid casting to unsupported types\n"
+        )

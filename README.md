@@ -10,6 +10,14 @@ An enterprise-grade financial intelligence platform that combines comprehensive 
 
 ## 🌟 What Makes FinanGPT Special?
 
+### 🆕 Phase 5 Enhancements (2025)
+- **Semantic SQL Guardrails**: the validator now understands intent. Questions about “Top” or “Count” queries must match SQL semantics, and chat retries receive automatic coaching when the first attempt fails.
+- **Bounded Mongo Freshness**: freshness checks run in batched, timeout-aware workers so queries never stall—even if Mongo is slow. When freshness is unknown, we warn you but still answer immediately.
+- **Shared Query Cache Metrics**: every query records cache hit/miss and latency; `python finangpt.py status --metrics-json` shows live hit rates so you can tune TTLs.
+- **Configurable Data Directory**: all mutable artefacts (DuckDB files, history DB, logs, charts, temp files) now live under `FINANGPT_DATA_DIR` (default `./data`). Legacy files are auto-migrated on first run.
+- **Rotating JSON Logs + Chart Retention**: logs roll automatically (size + backups), charts prune to the configured cap (default 1,000) so long-running sessions stay tidy.
+- **Streaming Transforms & Integrity Checks**: Mongo→DuckDB loads respect `transform.chunk_size` / `enable_streaming` to keep RSS <2 GB, with optional integrity checks to verify row counts within tolerance.
+
 ### 🌍 **True Global Coverage** (NEW in Phase 2)
 - **Analyze stocks from ANY country**: US, Europe, Asia, Americas, emerging markets
 - **12+ major currencies supported**: USD, EUR, GBP, JPY, CNY, CAD, AUD, CHF, HKD, SGD, KRW, INR
@@ -88,6 +96,9 @@ source .venv/bin/activate  # Linux/Mac
 # 2. Install dependencies
 pip install -r requirements.txt
 
+# (Optional) set a custom data directory for DuckDB, logs, charts, etc.
+export FINANGPT_DATA_DIR=/path/to/finangpt-data
+
 # 3. Configure (create .env file)
 cat > .env << EOF
 MONGO_URI=mongodb://localhost:27017/financial_data
@@ -105,7 +116,10 @@ ollama serve
 ollama pull gpt-oss:latest
 ```
 
-**Important**: All Python scripts should be run from the project root directory. The wrapper scripts (`finangpt.py`, `chat.py`, `query.py`, `ingest.py`, `transform.py`) automatically set up the Python path to find the `src` module.
+**Important**:
+- All commands should be run from the **project root**.
+- Mutable artefacts now live under `${FINANGPT_DATA_DIR:-./data}`. When you upgrade, legacy `financial_data.duckdb`, `logs/`, `charts/`, etc. are migrated automatically.
+- Wrapper scripts (`finangpt.py`, `chat.py`, `query.py`, `ingest.py`, `transform.py`) set up `PYTHONPATH` for you. When running pytest manually, use `PYTHONPATH=src pytest -q` to mirror this behaviour.
 
 ### Your First Query
 
@@ -160,6 +174,21 @@ python query.py "question"  # One-shot query
 python ingest.py --tickers AAPL,MSFT
 python transform.py
 ```
+
+### 📂 Data Directory Layout & Retention
+
+- **Data dir**: All mutable artefacts live under `${FINANGPT_DATA_DIR:-./data}` (DuckDB, logs, charts, tmp, cache metrics, query history). Set `FINANGPT_DATA_DIR` before running commands if you want to relocate storage.
+- **Auto-migration**: On upgrade, legacy files at the repo root are transparently migrated into the data directory with a log note—no manual cleanup required.
+- **Charts & logs hygiene**: Logs rotate via `logging.max_file_size_mb` / `logging.backup_count`. Charts prune to the configured `chart_retention_limit` (default 1,000) so long-running sessions stay tidy.
+- **Metrics**: Cache hit/miss/latency numbers live in `data/logs/cache_metrics.json`; inspect them with `python finangpt.py status --metrics-json`.
+
+---
+
+### ✅ Testing & QA
+
+1. Install dependencies (Hypothesis for fuzzing): `pip install -r requirements.txt`.
+2. Run the full suite with `PYTHONPATH=.:src pytest -q`.
+3. Guardrail fuzz tests (`tests/test_sql_validator_fuzz.py`) will fail immediately if dangerous SQL slips past the validator—run them whenever touching query or security code.
 
 ---
 

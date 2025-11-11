@@ -9,7 +9,7 @@ import os
 from datetime import UTC, datetime, date
 from numbers import Number
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Sequence
+from typing import Any, Dict, List, Mapping, Sequence, Callable
 
 import duckdb
 import pandas as pd
@@ -20,6 +20,7 @@ from pymongo.database import Database
 
 from src.core.time_utils import parse_utc_timestamp
 from src.core.config_loader import load_config
+from src.utils.paths import get_duckdb_path
 
 # Import streaming transformation module
 try:
@@ -34,10 +35,131 @@ from src.utils.logging import configure_logger, log_event
 # Import centralized utilities
 from src.utils.common import is_numeric_strict as is_numeric
 
-LOGS_DIR = Path("logs")
-DUCKDB_PATH = "financial_data.duckdb"
 ANNUAL_TABLE = "financials.annual"
 QUARTERLY_TABLE = "financials.quarterly"
+DEFAULT_CHUNK_SIZE = 1000
+
+
+def _coerce_positive_int(value: Any, fallback: int) -> int:
+    try:
+        parsed = int(value)
+        return parsed if parsed > 0 else fallback
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _coerce_non_negative_float(value: Any, fallback: float) -> float:
+    try:
+        parsed = float(value)
+        return parsed if parsed >= 0 else fallback
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _load_transform_settings() -> Dict[str, Any]:
+    config = load_config()
+    transform_cfg = config.get('transform', {}) if hasattr(config, 'get') else {}
+
+    chunk_size = _coerce_positive_int(transform_cfg.get('chunk_size', DEFAULT_CHUNK_SIZE), DEFAULT_CHUNK_SIZE)
+    run_integrity_checks = bool(transform_cfg.get('run_integrity_checks', False))
+    integrity_tolerance_pct = _coerce_non_negative_float(transform_cfg.get('integrity_tolerance_pct', 1.0), 1.0)
+    enable_streaming_requested = bool(transform_cfg.get('enable_streaming', False))
+
+    return {
+        'chunk_size': chunk_size,
+        'run_integrity_checks': run_integrity_checks,
+        'integrity_tolerance_pct': integrity_tolerance_pct,
+        'enable_streaming_requested': enable_streaming_requested,
+    }
+
+
+def run_integrity_check(
+    conn: duckdb.DuckDBPyConnection,
+    table_name: str,
+    source_count: int,
+    tolerance_pct: float,
+    dataset_label: str,
+    logger: logging.Logger,
+) -> None:
+    if source_count <= 0:
+        return
+
+    try:
+        dest_count_row = conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()
+        dest_count = dest_count_row[0] if dest_count_row else 0
+    except duckdb.Error as exc:
+        message = f"Integrity check failed for {dataset_label}: unable to read {table_name} ({exc})"
+        log_event(logger, phase=f"transform.integrity_error.{dataset_label}", message=message)
+        raise SystemExit(message) from exc
+
+    diff_pct = abs(dest_count - source_count) / max(1, source_count) * 100
+    if diff_pct > tolerance_pct:
+        message = (
+            f"Integrity check failed for {dataset_label}: Mongo rows={source_count}, "
+            f"DuckDB rows={dest_count}, diff={diff_pct:.2f}% > {tolerance_pct:.2f}%"
+        )
+        log_event(
+            logger,
+            phase=f"transform.integrity_failed.{dataset_label}",
+            message=message,
+            source_rows=source_count,
+            dest_rows=dest_count,
+            diff_pct=diff_pct,
+        )
+        raise SystemExit(message)
+
+    log_event(
+        logger,
+        phase=f"transform.integrity_ok.{dataset_label}",
+        source_rows=source_count,
+        dest_rows=dest_count,
+        diff_pct=diff_pct,
+    )
+
+
+def process_upsertable_collection(
+    collection: Collection,
+    conn: duckdb.DuckDBPyConnection,
+    schema: str,
+    table_name: str,
+    prepare_func: Callable[[Sequence[Mapping[str, Any]]], pd.DataFrame],
+    enable_streaming: bool,
+    chunk_size: int,
+    logger: logging.Logger,
+    run_integrity_checks: bool,
+    integrity_tolerance_pct: float,
+    dataset_label: str,
+    key_columns: Sequence[str] | None = None,
+) -> int:
+    full_table_name = f"{schema}.{table_name}"
+
+    if enable_streaming and STREAMING_AVAILABLE:
+        rows = transform_with_streaming(
+            collection,
+            conn,
+            table_name,
+            schema,
+            prepare_func,
+            chunk_size=chunk_size,
+            logger=logger,
+        )
+    else:
+        documents = fetch_documents(collection)
+        frame = prepare_func(documents)
+        rows = upsert_dataframe(conn, frame, full_table_name, schema, key_columns)
+
+    if run_integrity_checks:
+        source_count = collection.count_documents({})
+        run_integrity_check(
+            conn,
+            full_table_name,
+            source_count,
+            integrity_tolerance_pct,
+            dataset_label,
+            logger,
+        )
+
+    return rows
 
 
 
@@ -613,67 +735,116 @@ def main() -> None:
     mongo_uri = os.getenv("MONGO_URI")
     if not mongo_uri:
         raise SystemExit("MONGO_URI is not set.")
+    settings = _load_transform_settings()
     logger = configure_logger("transform")
 
-    # Fetch all data from MongoDB
-    with MongoClient(mongo_uri) as client:
-        database = load_database(client, mongo_uri)
-        annual_docs = fetch_documents(database["raw_annual"])
-        quarterly_docs = fetch_documents(database["raw_quarterly"])
-        prices_docs = fetch_documents(database["stock_prices_daily"])
-        dividends_docs = fetch_documents(database["dividends_history"])
-        splits_docs = fetch_documents(database["splits_history"])
-        metadata_docs = fetch_documents(database["company_metadata"])
-        # Phase 8: Earnings data
-        earnings_history_docs = fetch_documents(database["earnings_history"])
-        earnings_calendar_docs = fetch_documents(database["earnings_calendar"])
-        # Phase 9: Analyst data
-        analyst_recommendations_docs = fetch_documents(database["analyst_recommendations"])
-        price_targets_docs = fetch_documents(database["price_targets"])
-        analyst_consensus_docs = fetch_documents(database["analyst_consensus"])
-        growth_estimates_docs = fetch_documents(database["growth_estimates"])
+    enable_streaming = settings["enable_streaming_requested"] and STREAMING_AVAILABLE
+    if settings["enable_streaming_requested"] and not enable_streaming:
+        logger.warning(
+            "transform.enable_streaming is true but streaming module is unavailable; using in-memory mode instead."
+        )
 
-    # Prepare DataFrames
-    annual_frame = prepare_dataframe(annual_docs)
-    quarterly_frame = prepare_dataframe(quarterly_docs)
-    prices_frame = prepare_prices_dataframe(prices_docs)
-    dividends_frame = prepare_dividends_dataframe(dividends_docs)
-    splits_frame = prepare_splits_dataframe(splits_docs)
-    metadata_frame = prepare_metadata_dataframe(metadata_docs)
-    # Phase 8: Earnings data
-    earnings_history_frame = prepare_earnings_history_dataframe(earnings_history_docs)
-    earnings_calendar_frame = prepare_earnings_calendar_dataframe(earnings_calendar_docs)
-    # Phase 9: Analyst data - prepare frames from MongoDB documents
-    # These will be processed into raw tables, then views will be created by analyst.py functions
-    analyst_recs_frame = prepare_analyst_recommendations_dataframe(analyst_recommendations_docs)
-    price_targets_frame = prepare_price_targets_dataframe(price_targets_docs)
-    analyst_consensus_frame = prepare_analyst_consensus_dataframe(analyst_consensus_docs)
-    growth_estimates_frame = prepare_growth_estimates_dataframe(growth_estimates_docs)
+    metadata_frame = pd.DataFrame()
+    earnings_history_frame = pd.DataFrame()
+    earnings_calendar_frame = pd.DataFrame()
+    analyst_recs_frame = pd.DataFrame()
+    price_targets_frame = pd.DataFrame()
+    analyst_consensus_frame = pd.DataFrame()
+    growth_estimates_frame = pd.DataFrame()
 
-    # Transform to DuckDB
-    conn = duckdb.connect(DUCKDB_PATH)
+    conn = duckdb.connect(str(get_duckdb_path()))
     try:
-        # Financial statements
-        annual_rows = upsert_dataframe(conn, annual_frame, ANNUAL_TABLE, "financials")
-        log_event(logger, phase="transform.annual", rows=annual_rows)
+        with MongoClient(mongo_uri) as client:
+            database = load_database(client, mongo_uri)
 
-        quarterly_rows = upsert_dataframe(conn, quarterly_frame, QUARTERLY_TABLE, "financials")
-        log_event(logger, phase="transform.quarterly", rows=quarterly_rows)
+            # Financial statements
+            annual_rows = process_upsertable_collection(
+                database["raw_annual"],
+                conn,
+                schema="financials",
+                table_name="annual",
+                prepare_func=prepare_dataframe,
+                enable_streaming=enable_streaming,
+                chunk_size=settings["chunk_size"],
+                logger=logger,
+                run_integrity_checks=settings["run_integrity_checks"],
+                integrity_tolerance_pct=settings["integrity_tolerance_pct"],
+                dataset_label="annual",
+                key_columns=["ticker", "date"],
+            )
+            log_event(logger, phase="transform.annual", rows=annual_rows)
 
-        # Prices
-        conn.execute("CREATE SCHEMA IF NOT EXISTS prices")
-        prices_rows = upsert_dataframe(conn, prices_frame, "prices.daily", "prices")
-        log_event(logger, phase="transform.prices", rows=prices_rows)
+            quarterly_rows = process_upsertable_collection(
+                database["raw_quarterly"],
+                conn,
+                schema="financials",
+                table_name="quarterly",
+                prepare_func=prepare_dataframe,
+                enable_streaming=enable_streaming,
+                chunk_size=settings["chunk_size"],
+                logger=logger,
+                run_integrity_checks=settings["run_integrity_checks"],
+                integrity_tolerance_pct=settings["integrity_tolerance_pct"],
+                dataset_label="quarterly",
+                key_columns=["ticker", "date"],
+            )
+            log_event(logger, phase="transform.quarterly", rows=quarterly_rows)
 
-        # Dividends
-        conn.execute("CREATE SCHEMA IF NOT EXISTS dividends")
-        div_rows = upsert_dataframe(conn, dividends_frame, "dividends.history", "dividends")
-        log_event(logger, phase="transform.dividends", rows=div_rows)
+            prices_rows = process_upsertable_collection(
+                database["stock_prices_daily"],
+                conn,
+                schema="prices",
+                table_name="daily",
+                prepare_func=prepare_prices_dataframe,
+                enable_streaming=enable_streaming,
+                chunk_size=settings["chunk_size"],
+                logger=logger,
+                run_integrity_checks=settings["run_integrity_checks"],
+                integrity_tolerance_pct=settings["integrity_tolerance_pct"],
+                dataset_label="prices",
+                key_columns=["ticker", "date"],
+            )
+            log_event(logger, phase="transform.prices", rows=prices_rows)
 
-        # Splits
-        conn.execute("CREATE SCHEMA IF NOT EXISTS splits")
-        split_rows = upsert_dataframe(conn, splits_frame, "splits.history", "splits")
-        log_event(logger, phase="transform.splits", rows=split_rows)
+            div_rows = process_upsertable_collection(
+                database["dividends_history"],
+                conn,
+                schema="dividends",
+                table_name="history",
+                prepare_func=prepare_dividends_dataframe,
+                enable_streaming=enable_streaming,
+                chunk_size=settings["chunk_size"],
+                logger=logger,
+                run_integrity_checks=settings["run_integrity_checks"],
+                integrity_tolerance_pct=settings["integrity_tolerance_pct"],
+                dataset_label="dividends",
+                key_columns=["ticker", "date"],
+            )
+            log_event(logger, phase="transform.dividends", rows=div_rows)
+
+            split_rows = process_upsertable_collection(
+                database["splits_history"],
+                conn,
+                schema="splits",
+                table_name="history",
+                prepare_func=prepare_splits_dataframe,
+                enable_streaming=enable_streaming,
+                chunk_size=settings["chunk_size"],
+                logger=logger,
+                run_integrity_checks=settings["run_integrity_checks"],
+                integrity_tolerance_pct=settings["integrity_tolerance_pct"],
+                dataset_label="splits",
+                key_columns=["ticker", "date"],
+            )
+            log_event(logger, phase="transform.splits", rows=split_rows)
+
+            metadata_frame = prepare_metadata_dataframe(fetch_documents(database["company_metadata"]))
+            earnings_history_frame = prepare_earnings_history_dataframe(fetch_documents(database["earnings_history"]))
+            earnings_calendar_frame = prepare_earnings_calendar_dataframe(fetch_documents(database["earnings_calendar"]))
+            analyst_recs_frame = prepare_analyst_recommendations_dataframe(fetch_documents(database["analyst_recommendations"]))
+            price_targets_frame = prepare_price_targets_dataframe(fetch_documents(database["price_targets"]))
+            analyst_consensus_frame = prepare_analyst_consensus_dataframe(fetch_documents(database["analyst_consensus"]))
+            growth_estimates_frame = prepare_growth_estimates_dataframe(fetch_documents(database["growth_estimates"]))
 
         # Company metadata (simple replace, no date-based upsert)
         conn.execute("CREATE SCHEMA IF NOT EXISTS company")

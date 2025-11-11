@@ -15,12 +15,20 @@ Author: FinanGPT Enhancement Plan 3
 Created: 2025-11-09
 """
 
-from typing import Optional, Dict, Tuple, Any, Callable
+from typing import Optional, Dict, Tuple, Any, Callable, Sequence
 from time import time
 from functools import wraps
 import pandas as pd
 import hashlib
 import threading
+import json
+from pathlib import Path
+from datetime import datetime, UTC
+
+from src.utils.paths import get_cache_metrics_path
+
+
+DEFAULT_METRICS_PATH = get_cache_metrics_path()
 
 
 class QueryCache:
@@ -50,7 +58,12 @@ class QueryCache:
         >>> result = cache.get(sql)  # Returns instantly from cache
     """
 
-    def __init__(self, ttl_seconds: int = 300, max_entries: int = 100):
+    def __init__(
+        self,
+        ttl_seconds: int = 300,
+        max_entries: int = 100,
+        metrics_path: Optional[str | Path] = None,
+    ):
         """
         Initialize query cache.
 
@@ -62,9 +75,15 @@ class QueryCache:
         self.max_entries = max_entries
         self._cache: Dict[str, Tuple[pd.DataFrame, float]] = {}
         self._access_times: Dict[str, float] = {}
+        self._metadata: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.Lock()  # Thread-safe operations
         self._hits = 0
         self._misses = 0
+        self._latency_total = 0.0
+        self._latency_samples = 0
+        self._metrics_path = Path(metrics_path) if metrics_path else DEFAULT_METRICS_PATH
+        self._metrics_path.parent.mkdir(parents=True, exist_ok=True)
+        self._load_metrics()
 
     def _normalize_sql(self, sql: str) -> str:
         """
@@ -92,6 +111,33 @@ class QueryCache:
 
         # Hash for fixed-length key (prevents memory issues with long SQL)
         return hashlib.md5(normalized.encode()).hexdigest()
+
+    def _load_metrics(self) -> None:
+        if not self._metrics_path.exists():
+            return
+        try:
+            data = json.loads(self._metrics_path.read_text(encoding='utf-8'))
+        except (json.JSONDecodeError, OSError):
+            return
+
+        self._hits = int(data.get('hits', self._hits))
+        self._misses = int(data.get('misses', self._misses))
+        self._latency_total = float(data.get('latency_total', self._latency_total))
+        self._latency_samples = int(data.get('latency_samples', self._latency_samples))
+
+    def _save_metrics(self) -> None:
+        data = {
+            'hits': self._hits,
+            'misses': self._misses,
+            'latency_total': self._latency_total,
+            'latency_samples': self._latency_samples,
+            'last_updated': datetime.now(UTC).isoformat(),
+        }
+        try:
+            self._metrics_path.parent.mkdir(parents=True, exist_ok=True)
+            self._metrics_path.write_text(json.dumps(data), encoding='utf-8')
+        except OSError:
+            pass
 
     def get(self, sql: str) -> Optional[pd.DataFrame]:
         """
@@ -121,6 +167,7 @@ class QueryCache:
                     # Update LRU access time
                     self._access_times[cache_key] = time()
                     self._hits += 1
+                    self._save_metrics()
 
                     # Return copy to prevent mutation
                     return result.copy()
@@ -128,11 +175,18 @@ class QueryCache:
                 # Expired - remove from cache
                 del self._cache[cache_key]
                 del self._access_times[cache_key]
+                self._metadata.pop(cache_key, None)
 
             self._misses += 1
+            self._save_metrics()
             return None
 
-    def set(self, sql: str, result: pd.DataFrame) -> None:
+    def set(
+        self,
+        sql: str,
+        result: pd.DataFrame,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """
         Cache query result with current timestamp.
 
@@ -155,10 +209,15 @@ class QueryCache:
                 lru_key = min(self._access_times.items(), key=lambda x: x[1])[0]
                 del self._cache[lru_key]
                 del self._access_times[lru_key]
+                self._metadata.pop(lru_key, None)
 
             # Store result (copy to prevent external mutations)
             self._cache[cache_key] = (result.copy(), time())
             self._access_times[cache_key] = time()
+            if metadata is not None:
+                self._metadata[cache_key] = metadata
+            else:
+                self._metadata.pop(cache_key, None)
 
     def clear(self) -> None:
         """
@@ -171,31 +230,52 @@ class QueryCache:
         with self._lock:
             self._cache.clear()
             self._access_times.clear()
+            self._metadata.clear()
             self._hits = 0
             self._misses = 0
+            self._latency_total = 0.0
+            self._latency_samples = 0
+            self._save_metrics()
 
-    def invalidate(self, sql: str) -> bool:
-        """
-        Invalidate (remove) specific cached query.
+    def record_query_latency(self, seconds: float) -> None:
+        """Record observed query latency (seconds)."""
 
-        Args:
-            sql: SQL query to invalidate
-
-        Returns:
-            True if entry was found and removed, False otherwise
-
-        Example:
-            >>> cache.invalidate("SELECT * FROM financials.annual LIMIT 10")
-        """
+        if seconds is None or seconds < 0:
+            return
         with self._lock:
-            cache_key = self._normalize_sql(sql)
+            self._latency_total += seconds
+            self._latency_samples += 1
+            self._save_metrics()
 
-            if cache_key in self._cache:
-                del self._cache[cache_key]
-                del self._access_times[cache_key]
-                return True
+    def invalidate(
+        self,
+        sql: Optional[str] = None,
+        tickers: Optional[Sequence[str]] = None,
+    ) -> int:
+        """Invalidate cached queries by SQL text or ticker dependency."""
 
-            return False
+        with self._lock:
+            targets = set()
+
+            if sql:
+                targets.add(self._normalize_sql(sql))
+
+            if tickers:
+                lookup = {ticker.upper() for ticker in tickers}
+                for key, meta in self._metadata.items():
+                    deps = [t.upper() for t in meta.get('tickers', [])]
+                    if any(t in lookup for t in deps):
+                        targets.add(key)
+
+            removed = 0
+            for cache_key in targets:
+                if cache_key in self._cache:
+                    del self._cache[cache_key]
+                    self._access_times.pop(cache_key, None)
+                    self._metadata.pop(cache_key, None)
+                    removed += 1
+
+            return removed
 
     def stats(self) -> Dict[str, Any]:
         """
@@ -212,6 +292,11 @@ class QueryCache:
         with self._lock:
             total_requests = self._hits + self._misses
             hit_rate = (self._hits / total_requests * 100) if total_requests > 0 else 0
+            avg_latency_ms = (
+                (self._latency_total / self._latency_samples) * 1000
+                if self._latency_samples > 0
+                else 0
+            )
 
             return {
                 'entries': len(self._cache),
@@ -221,7 +306,9 @@ class QueryCache:
                 'misses': self._misses,
                 'total_requests': total_requests,
                 'hit_rate_pct': hit_rate,
-                'utilization_pct': (len(self._cache) / self.max_entries * 100) if self.max_entries > 0 else 0
+                'utilization_pct': (len(self._cache) / self.max_entries * 100) if self.max_entries > 0 else 0,
+                'latency_samples': self._latency_samples,
+                'avg_latency_ms': avg_latency_ms,
             }
 
     def print_stats(self) -> None:
@@ -243,6 +330,14 @@ class QueryCache:
         print(f"  Hits: {stats['hits']} | Misses: {stats['misses']} "
               f"({stats['hit_rate_pct']:.1f}% hit rate)")
         print(f"  TTL: {stats['ttl_seconds']}s")
+
+    def get_entry_metadata(self, sql: str) -> Optional[Dict[str, Any]]:
+        """Return metadata associated with a cached SQL query, if present."""
+
+        cache_key = self._normalize_sql(sql)
+        with self._lock:
+            meta = self._metadata.get(cache_key)
+            return dict(meta) if meta else None
 
 
 def with_cache(cache: QueryCache):
@@ -320,3 +415,14 @@ def get_global_cache(ttl_seconds: int = 300, max_entries: int = 100) -> QueryCac
         _global_cache = QueryCache(ttl_seconds=ttl_seconds, max_entries=max_entries)
 
     return _global_cache
+
+
+def read_persisted_metrics() -> Dict[str, Any]:
+    """Read cached metrics from disk without instantiating the cache."""
+
+    if not DEFAULT_METRICS_PATH.exists():
+        return {}
+    try:
+        return json.loads(DEFAULT_METRICS_PATH.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError):
+        return {}

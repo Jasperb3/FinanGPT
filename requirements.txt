@@ -9,4 +9,5 @@ matplotlib
 mplfinance
 openpyxl
 pyyaml
-tqdm>=4.66.0
+tqdm
+hypothesis

@@ -12,7 +12,10 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+import random
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
+from typing import Any, Dict, List, Optional, Callable, Sequence, Tuple
 
 import duckdb
 import yaml
@@ -156,6 +159,58 @@ def suggest_tickers(partial: str, conn: duckdb.DuckDBPyConnection, limit: int = 
         return [r[0] for r in results]
     except duckdb.Error:
         return []
+
+
+def jittered_backoff_delays(base_seconds: float, factor: float, max_retries: int) -> List[float]:
+    """Return a list of backoff delays with jitter."""
+
+    delays = []
+    for attempt in range(max_retries):
+        delay = base_seconds * (factor ** attempt)
+        jitter = random.uniform(0, delay * 0.25)
+        delays.append(delay + jitter)
+    return delays
+
+
+def bounded_parallel_map(
+    func: Callable[[Any], Any],
+    items: Sequence[Any],
+    max_workers: int,
+    timeout: float,
+) -> Tuple[List[Any], List[Any]]:
+    """Execute func over items with bounded parallelism and timeout.
+
+    Returns (results, errors) where each result is a tuple (item, value) and
+    each error is (item, exception).
+    """
+
+    results: List[Any] = []
+    errors: List[Any] = []
+    if not items:
+        return results, errors
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_map = {executor.submit(func, item): item for item in items}
+        start = time.time()
+        try:
+            for future in as_completed(future_map, timeout=timeout):
+                item = future_map[future]
+                try:
+                    value = future.result()
+                    results.append((item, value))
+                except Exception as exc:  # noqa: BLE001
+                    errors.append((item, exc))
+        except FuturesTimeoutError:
+            pass
+
+        elapsed = time.time() - start
+        if elapsed >= timeout:
+            for future, item in future_map.items():
+                if not future.done():
+                    future.cancel()
+                    errors.append((item, TimeoutError("freshness batch timed out")))
+
+    return results, errors
 
 
 def get_all_tickers(conn: duckdb.DuckDBPyConnection) -> List[str]:

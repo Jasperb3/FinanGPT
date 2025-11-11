@@ -8,12 +8,14 @@ import json
 import logging
 import os
 import re
-import sys
 import time
 from datetime import UTC, datetime, timedelta, date
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set
+import threading
+from collections import deque
+import hashlib
 
 import duckdb
 import pandas as pd
@@ -23,6 +25,8 @@ from pymongo import MongoClient
 from pymongo.database import Database
 
 from src.core.time_utils import parse_utc_timestamp
+from src.core.config_loader import load_config
+from src.utils.paths import get_duckdb_path
 
 # Import centralized logging
 from src.utils.logging import configure_logger, log_event
@@ -309,9 +313,6 @@ class SemanticValidationError(Exception):
 # Rate Limiting
 # ============================================================================
 
-import threading
-from collections import deque
-
 
 class RateLimiter:
     """Token bucket rate limiter for Ollama requests."""
@@ -384,6 +385,8 @@ try:
         print_debug_info,
         suggest_tickers,
         validate_ticker,
+        bounded_parallel_map,
+        jittered_backoff_delays,
     )
     RESILIENCE_AVAILABLE = True
 except ImportError:
@@ -392,15 +395,52 @@ except ImportError:
 # Import query caching module
 try:
     from src.query.cache import QueryCache
-    from src.core.config_loader import load_config
     CACHE_AVAILABLE = True
 except ImportError:
     CACHE_AVAILABLE = False
 
-LOGS_DIR = Path("logs")
-DEFAULT_LIMIT = 25
-MAX_LIMIT = 100
+LEGACY_DEFAULT_LIMIT = 25
+LEGACY_MAX_LIMIT = 100
+
+try:
+    _CONFIG = load_config()
+except Exception:
+    _CONFIG = None
+
+_QUERY_DEFAULT_LIMIT = _CONFIG.default_limit if _CONFIG else LEGACY_DEFAULT_LIMIT
+_QUERY_MAX_LIMIT = _CONFIG.max_limit if _CONFIG else LEGACY_MAX_LIMIT
+_QUERY_SETTINGS = _CONFIG.get('query', {}) if _CONFIG else {}
+
+_SEMANTIC_VALIDATION_TOGGLE = (
+    _QUERY_SETTINGS.get('semantic_validation_enabled')
+    if isinstance(_QUERY_SETTINGS, dict)
+    else None
+)
+
+DEFAULT_LIMIT = _QUERY_DEFAULT_LIMIT
+MAX_LIMIT = _QUERY_MAX_LIMIT
 DEFAULT_STALENESS_THRESHOLD_DAYS = 7
+
+_SECURITY_SETTINGS = None
+
+
+def _get_security_settings() -> Dict[str, Any]:
+    """Return cached security settings from config."""
+    global _SECURITY_SETTINGS
+    if _SECURITY_SETTINGS is None:
+        security_cfg = _CONFIG.get('security', {}) if _CONFIG else {}
+        _SECURITY_SETTINGS = {
+            'allow_comments': security_cfg.get('allow_comments', True),
+            'allow_union': security_cfg.get('allow_union', True),
+            'compat_legacy_validator': security_cfg.get('compat_legacy_validator', False),
+        }
+    return _SECURITY_SETTINGS
+
+
+def _semantic_validation_enabled() -> Optional[bool]:
+    if _SEMANTIC_VALIDATION_TOGGLE is None:
+        return None
+    return bool(_SEMANTIC_VALIDATION_TOGGLE)
 
 # Global cache instance
 _query_cache = None
@@ -417,8 +457,51 @@ def get_query_cache(config: Dict[str, Any]) -> Optional['QueryCache']:
     return _query_cache
 
 
+def build_cache_metadata(
+    tickers: Sequence[str],
+    freshness_info: Optional[Mapping[str, Any]] = None,
+    freshness_status: str = "ok",
+) -> Dict[str, Any]:
+    """Build metadata describing which tickers a cached entry depends on."""
+
+    metadata: Dict[str, Any] = {
+        'tickers': list(tickers) if tickers else [],
+    }
+
+    timestamp_map: Dict[str, Any] = {}
+    if freshness_info:
+        for ticker in tickers:
+            info = freshness_info.get(ticker)
+            if not info:
+                continue
+            ts = info.get('last_fetched') or info.get('timestamp')
+            if ts:
+                timestamp_map[ticker] = ts
+
+    if timestamp_map:
+        metadata['last_ingest_ts'] = timestamp_map
+    else:
+        metadata['last_ingest_ts'] = datetime.now(UTC).isoformat()
+
+    metadata['freshness_status'] = freshness_status
+
+    return metadata
+
+
+def invalidate_cache_for_tickers(tickers: Sequence[str]) -> int:
+    """Invalidate cached queries referencing the provided tickers."""
+
+    if not tickers or not CACHE_AVAILABLE:
+        return 0
+
+    config = _CONFIG or load_config()
+    cache = get_query_cache(config) if config else None
+    if not cache:
+        return 0
+    return cache.invalidate(tickers=tickers)
+
+
 # Schema caching with refresh detection
-import hashlib
 
 _schema_cache = None
 _schema_hash = None
@@ -508,61 +591,79 @@ def extract_tickers_from_sql(sql: str) -> List[str]:
     return list(set(tickers))  # Deduplicate
 
 
+class FreshnessConfig:
+    def __init__(self) -> None:
+        config = load_config()
+        raw = config.get('freshness', {}) if hasattr(config, 'get') else {}
+        self.max_batch_size = int(raw.get('max_batch_size', 10))
+        self.timeout_ms = int(raw.get('timeout_ms', 2000))
+        self.max_retries = int(raw.get('max_retries', 1))
+        self.threshold_days = raw.get('staleness_threshold_days', DEFAULT_STALENESS_THRESHOLD_DAYS)
+
+
+FRESHNESS_CFG = FreshnessConfig()
+
+
 def check_data_freshness(
     mongo_db: Optional[Database],
     tickers: List[str],
     threshold_days: int = DEFAULT_STALENESS_THRESHOLD_DAYS,
 ) -> Dict[str, Any]:
-    """Check if data for the given tickers is stale.
-
-    Returns a dict with:
-    - is_stale: bool
-    - stale_tickers: list of tickers with stale data
-    - freshness_info: dict mapping ticker to days since last fetch
-    """
+    """Check if data for the given tickers is stale with bounded batching."""
     if not mongo_db or not tickers:
-        return {"is_stale": False, "stale_tickers": [], "freshness_info": {}}
+        return {"is_stale": False, "stale_tickers": [], "freshness_info": {}, "status": "skipped"}
 
-    try:
-        metadata_collection = mongo_db["ingestion_metadata"]
-        stale_tickers = []
-        freshness_info = {}
+    metadata_collection = mongo_db["ingestion_metadata"]
+    stale_tickers: List[str] = []
+    freshness_info: Dict[str, str] = {}
+    status = "ok"
 
-        for ticker in tickers:
-            # Check the most recent fetch across all data types
-            most_recent = metadata_collection.find_one(
-                {"ticker": ticker},
-                sort=[("last_fetched", -1)]
-            )
+    def fetch_single(ticker: str) -> Dict[str, Any]:
+        return metadata_collection.find_one({"ticker": ticker}, sort=[("last_fetched", -1)])
 
-            if not most_recent:
-                stale_tickers.append(ticker)
-                freshness_info[ticker] = "never fetched"
+    batches = [tickers[i:i + FRESHNESS_CFG.max_batch_size] for i in range(0, len(tickers), FRESHNESS_CFG.max_batch_size)]
+
+    for batch in batches:
+        attempts = 0
+        delays = jittered_backoff_delays(0.25, 2.0, FRESHNESS_CFG.max_retries)
+        while attempts <= FRESHNESS_CFG.max_retries:
+            timeout = FRESHNESS_CFG.timeout_ms / 1000
+            results, errors = bounded_parallel_map(fetch_single, batch, max_workers=min(len(batch), 4), timeout=timeout)
+            if errors and attempts < FRESHNESS_CFG.max_retries:
+                time.sleep(delays[attempts] if attempts < len(delays) else 0)
+                attempts += 1
                 continue
 
-            last_fetched_str = most_recent.get("last_fetched")
-            if not last_fetched_str:
-                stale_tickers.append(ticker)
-                freshness_info[ticker] = "unknown"
-                continue
+            if errors:
+                status = "unknown"
+                for ticker, _ in errors:
+                    freshness_info[ticker] = "unknown"
+                break
 
-            last_fetched = parse_utc_timestamp(last_fetched_str)
-            age = datetime.now(UTC) - last_fetched
-            days_old = age.days
+            for ticker, doc in results:
+                if not doc:
+                    stale_tickers.append(ticker)
+                    freshness_info[ticker] = "never fetched"
+                    continue
+                last_fetched_str = doc.get("last_fetched")
+                if not last_fetched_str:
+                    stale_tickers.append(ticker)
+                    freshness_info[ticker] = "unknown"
+                    continue
+                last_fetched = parse_utc_timestamp(last_fetched_str)
+                age = datetime.now(UTC) - last_fetched
+                days_old = age.days
+                if days_old >= threshold_days:
+                    stale_tickers.append(ticker)
+                freshness_info[ticker] = f"{days_old} days old"
+            break
 
-            if days_old >= threshold_days:
-                stale_tickers.append(ticker)
-
-            freshness_info[ticker] = f"{days_old} days old"
-
-        return {
-            "is_stale": len(stale_tickers) > 0,
-            "stale_tickers": stale_tickers,
-            "freshness_info": freshness_info,
-        }
-    except Exception:
-        # If we can't check freshness, don't block the query
-        return {"is_stale": False, "stale_tickers": [], "freshness_info": {}}
+    return {
+        "is_stale": len(stale_tickers) > 0,
+        "stale_tickers": stale_tickers,
+        "freshness_info": freshness_info,
+        "status": status,
+    }
 
 
 
@@ -1005,31 +1106,90 @@ def validate_sql_semantics(sql: str, question: str) -> tuple[bool, str]:
         if 'lag(' not in sql_lower and 'lead(' not in sql_lower and 'yoy' not in sql_lower:
             return False, "Question asks for growth/change but SQL doesn't calculate it"
 
+    aggregate_funcs = ("sum(", "avg(", "count(", "min(", "max(")
+    uses_aggregate = any(func in sql_lower for func in aggregate_funcs)
+    has_group_by = "group by" in sql_lower
+
+    if uses_aggregate and not has_group_by:
+        return False, "Aggregations require a GROUP BY clause for non-aggregated columns."
+
+    if " join " in sql_lower:
+        select_clause = extract_select_clause(sql)
+        expressions = split_select_expressions(select_clause)
+        ambiguous = []
+        for expr in expressions:
+            cleaned = expr.strip()
+            if not cleaned or cleaned == "*":
+                continue
+            lowered = cleaned.lower()
+            if any(func in lowered for func in aggregate_funcs):
+                continue
+            if " as " in lowered:
+                cleaned = cleaned.split(" as ", 1)[0].strip()
+            if "." not in cleaned and "(" not in cleaned:
+                ambiguous.append(cleaned)
+                break
+        if ambiguous:
+            return False, f"Column '{ambiguous[0]}' should be qualified with a table alias when joining tables."
+
+    cast_matches = re.findall(r"cast\s*\([^)]*?as\s+([a-zA-Z0-9_]+)", sql_lower)
+    if cast_matches:
+        allowed_casts = {
+            "double", "float", "decimal", "numeric", "bigint", "int", "integer",
+            "smallint", "real", "varchar", "text", "date", "timestamp", "boolean"
+        }
+        for target in cast_matches:
+            if target not in allowed_casts:
+                return False, f"Casting to '{target}' is not supported in safe mode."
+
     return True, "OK"
 
 
 def validate_sql(
     sql: str,
     schema: Mapping[str, Sequence[str]],
-    default_limit: int = DEFAULT_LIMIT,
-    max_limit: int = MAX_LIMIT,
+    default_limit: Optional[int] = None,
+    max_limit: Optional[int] = None,
+    question: Optional[str] = None,
 ) -> str:
     if not sql:
         raise ValueError("SQL cannot be empty.")
 
-    # Strip SQL comments first (LLM-generated comments are safe after extraction)
-    # Remove single-line comments (-- ...)
-    sql_no_comments = re.sub(r'--[^\n]*', '', sql)
-    # Remove multi-line comments (/* ... */)
+    security_settings = _get_security_settings()
+    allow_comments = security_settings['allow_comments']
+    allow_union = security_settings['allow_union']
+    compat_legacy = security_settings['compat_legacy_validator']
+
+    effective_default_limit = default_limit if default_limit is not None else (
+        LEGACY_DEFAULT_LIMIT if compat_legacy else DEFAULT_LIMIT
+    )
+    effective_max_limit = max_limit if max_limit is not None else (
+        LEGACY_MAX_LIMIT if compat_legacy else MAX_LIMIT
+    )
+
+    if compat_legacy:
+        allow_comments = True
+        allow_union = True
+
+    raw_sql = sql.strip()
+    if not allow_comments:
+        if re.search(r'(--|/\*)', raw_sql):
+            raise ValueError("SQL comments are disabled by policy.")
+
+    if not allow_union and re.search(r'\bunion\b', raw_sql, re.IGNORECASE):
+        raise ValueError("UNION queries are not permitted.")
+
+    # Strip SQL comments when allowed (LLM-generated comments are safe after extraction)
+    sql_no_comments = re.sub(r'--[^\n]*', '', raw_sql)
     sql_no_comments = re.sub(r'/\*.*?\*/', '', sql_no_comments, flags=re.DOTALL)
 
     cleaned = re.sub(r"\s+", " ", sql_no_comments.strip())
     cleaned_lower = cleaned.lower()
     if cleaned_lower.count(";") > 1 or (";" in cleaned[:-1] and not cleaned.endswith(";")):
-        raise ValueError("Only single-statement SQL is allowed.")
+        raise ValueError("Only single-statement SQL is allowed (semicolon detected).")
     statement_start = cleaned_lower.lstrip()
     if not statement_start.startswith(("select", "with")):
-        raise ValueError("Only SELECT statements are permitted.")
+        raise ValueError("Only SELECT/CTE statements are permitted.")
     main_select_idx = find_main_select_index(cleaned)
     if main_select_idx == -1:
         raise ValueError("Only SELECT statements are permitted.")
@@ -1064,10 +1224,28 @@ def validate_sql(
     limit_match = re.search(r"\blimit\s+(\d+)\b", cleaned_lower)
     if limit_match:
         value = int(limit_match.group(1))
-        if value > max_limit:
-            raise ValueError(f"LIMIT {value} exceeds the maximum of {max_limit}.")
+        if value > effective_max_limit:
+            cleaned = re.sub(
+                r"(?i)\blimit\s+\d+\b",
+                f"LIMIT {effective_max_limit}",
+                cleaned,
+                count=1,
+            )
     else:
-        cleaned = f"{cleaned} LIMIT {default_limit}"
+        cleaned = f"{cleaned} LIMIT {effective_default_limit}"
+
+    semantic_toggle = _semantic_validation_enabled()
+    should_run_semantics = (
+        question
+        and not compat_legacy
+        and (semantic_toggle if semantic_toggle is not None else True)
+    )
+
+    if should_run_semantics:
+        is_valid, reason = validate_sql_semantics(cleaned, question)
+        if not is_valid:
+            raise SemanticValidationError(reason)
+
     return cleaned.rstrip(";")
 
 
@@ -1349,7 +1527,7 @@ def main() -> None:
                 print(f"  • {tpl['name']}: {tpl['description']}")
         return
 
-    conn = duckdb.connect("financial_data.duckdb")
+    conn = duckdb.connect(str(get_duckdb_path()))
     schema = introspect_schema(conn, ALLOWED_TABLES)
     if not schema:
         conn.close()
@@ -1452,36 +1630,49 @@ def main() -> None:
                 conn.close()
                 raise SystemExit(f"Ollama connection failed: {conn_err}") from conn_err
 
-        # Validate SQL
-        sanitised_sql = validate_sql(sql, schema)
+        try:
+            sanitised_sql = validate_sql(sql, schema, question=question)
+        except SemanticValidationError as exc:
+            log_event(logger, phase="query.semantic_validation_failed", error=str(exc))
+            conn.close()
+            raise SystemExit(f"Semantic validation failed: {exc}") from exc
+
+        tickers = extract_tickers_from_sql(sanitised_sql)
+        freshness_details: Dict[str, Any] = {}
 
         if args.debug:
             print(f"[DEBUG] Validated SQL:\n{sanitised_sql}\n")
 
         # Check data freshness before executing
-        if mongo_db and not args.skip_freshness_check:
-            tickers = extract_tickers_from_sql(sanitised_sql)
-            if tickers:
-                freshness = check_data_freshness(mongo_db, tickers)
-                if freshness["is_stale"]:
-                    print("\n⚠️  Warning: Data may be stale")
-                    print(f"Stale tickers: {', '.join(freshness['stale_tickers'])}")
-                    print("\nFreshness details:")
-                    for ticker, info in freshness["freshness_info"].items():
-                        print(f"  {ticker}: {info}")
-                    print(f"\nTo update data, run: python ingest.py --refresh --tickers {','.join(tickers)}")
+        freshness_status = "skipped"
+        if mongo_db and not args.skip_freshness_check and tickers:
+            freshness = check_data_freshness(mongo_db, tickers)
+            freshness_details = freshness.get("freshness_info", {})
+            freshness_status = freshness.get("status", "ok")
+            if freshness_status == "unknown":
+                logger.warning("Freshness check timed out; proceeding with query.")
+            if freshness["is_stale"]:
+                print("\n⚠️  Warning: Data may be stale")
+                print(f"Stale tickers: {', '.join(freshness['stale_tickers'])}")
+                print("\nFreshness details:")
+                for ticker, info in freshness["freshness_info"].items():
+                    print(f"  {ticker}: {info}")
+                print(f"\nTo update data, run: python ingest.py --refresh --tickers {','.join(tickers)}")
 
-                    user_input = input("\nContinue with stale data? [y/N]: ").strip().lower()
-                    if user_input not in ("y", "yes"):
-                        raise SystemExit("Query cancelled. Please refresh data and try again.")
+                user_input = input("\nContinue with stale data? [y/N]: ").strip().lower()
+                if user_input not in ("y", "yes"):
+                    raise SystemExit("Query cancelled. Please refresh data and try again.")
+        else:
+            freshness_details = {}
+            freshness_status = "skipped"
 
         # Try to load config for cache
         config = {}
         if CACHE_AVAILABLE:
             try:
                 config = load_config()
-            except:
-                pass
+            except Exception as e:
+                logger.error(f"Failed to load config: {e}")
 
         # Check cache first
         cache = get_query_cache(config)
@@ -1494,24 +1685,30 @@ def main() -> None:
 
         if cached_df is not None:
             # Cache hit - convert DataFrame back to columns and rows
-            columns = list(cached_df.columns)
-            rows = [tuple(row) for row in cached_df.itertuples(index=False, name=None)]
+            df = cached_df
+            columns = list(df.columns)
+            rows = [tuple(row) for row in df.itertuples(index=False, name=None)]
             query_time = time.time() - start_time
             if args.debug:
                 print("🚀 Cache hit! Query returned instantly from cache.")
+            if cache:
+                cache.record_query_latency(query_time)
         else:
             # Cache miss - execute query
             result = conn.execute(sanitised_sql)
             columns = [desc[0] for desc in result.description]
             rows = result.fetchall()
             query_time = time.time() - start_time
+            df = pd.DataFrame(rows, columns=columns)
 
             # Cache the result
-            if cache and rows:
-                df = pd.DataFrame(rows, columns=columns)
-                cache.set(sanitised_sql, df)
+            if cache and not df.empty:
+                metadata = build_cache_metadata(tickers, freshness_details, freshness_status)
+                cache.set(sanitised_sql, df, metadata=metadata)
                 if args.debug:
                     print("💾 Query result cached for future use.")
+            if cache:
+                cache.record_query_latency(query_time)
 
         # Print debug info if enabled
         if args.debug and RESILIENCE_AVAILABLE:

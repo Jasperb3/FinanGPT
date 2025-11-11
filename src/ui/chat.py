@@ -10,8 +10,7 @@ import os
 import sys
 import time
 from datetime import UTC, datetime
-from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, TYPE_CHECKING
 
 import duckdb
 import pandas as pd
@@ -23,18 +22,27 @@ from pymongo.database import Database
 # Import shared functions from query.py
 from src.query_engine.query import (
     ALLOWED_TABLES,
+    CACHE_AVAILABLE,
     DEFAULT_STALENESS_THRESHOLD_DAYS,
     build_system_prompt,
+    build_cache_metadata,
     check_data_freshness,
     check_ollama_health,
     extract_sql,
     extract_tickers_from_sql,
+    get_query_cache,
     introspect_schema,
     load_mongo_database,
     pretty_print,
     validate_sql,
     call_ollama_chat_with_retry,
+    SemanticValidationError,
 )
+from src.core.config_loader import load_config
+from src.utils.paths import get_duckdb_path
+
+if TYPE_CHECKING:
+    from src.query.cache import QueryCache
 
 # Import centralized logging
 from src.utils.logging import configure_logger, log_event
@@ -72,9 +80,9 @@ try:
 except ImportError:
     QUERY_INTELLIGENCE_AVAILABLE = False
 
-LOGS_DIR = Path("logs")
 MAX_RETRIES = 3
 MAX_HISTORY_LENGTH = 20  # Limit conversation history to avoid token overflow
+CHAT_HISTORY_DB_LIMIT = int(os.getenv("CHAT_HISTORY_DB_LIMIT", "500"))
 
 
 # ============================================================================
@@ -140,6 +148,31 @@ def trim_conversation_history(
     result.extend(recent_msgs)
 
     return result
+
+
+def enforce_history_window(
+    conversation_history: List[Dict[str, str]],
+    max_length: int = MAX_HISTORY_LENGTH,
+) -> None:
+    """Trim the conversation history list in-place while preserving system prompt."""
+
+    if not conversation_history:
+        return
+
+    limit = max(0, max_length)
+    keep_count = limit
+    if len(conversation_history) <= keep_count + 1:
+        return
+
+    system_msg = conversation_history[0] if conversation_history[0]["role"] == "system" else None
+    recent_messages = conversation_history[-keep_count:]
+
+    new_history: List[Dict[str, str]] = []
+    if system_msg:
+        new_history.append(system_msg)
+
+    new_history.extend(recent_messages)
+    conversation_history[:] = new_history
 
 
 EXAMPLE_QUERIES = [
@@ -231,6 +264,7 @@ def execute_query_with_retry(
     skip_freshness: bool,
     user_query: str = "",
     debug: bool = False,
+    cache: Optional["QueryCache"] = None,
 ) -> Optional[Tuple[List[str], List[Tuple], str, pd.DataFrame]]:
     """Execute query with intelligent error recovery and retry logic.
 
@@ -240,6 +274,7 @@ def execute_query_with_retry(
 
     for attempt in range(MAX_RETRIES):
         try:
+            start_time = time.time()
             # Trim conversation history to fit context window
             trimmed_history = trim_conversation_history(conversation_history, max_tokens=4000)
 
@@ -259,7 +294,10 @@ def execute_query_with_retry(
 
             # Extract and validate SQL
             sql = extract_sql(response_text)
-            sanitised_sql = validate_sql(sql, schema)
+            sanitised_sql = validate_sql(sql, schema, question=user_query)
+            tickers = extract_tickers_from_sql(sanitised_sql)
+            freshness_details: Dict[str, Any] = {}
+            freshness_status = "skipped"
 
             if debug:
                 print(f"\n[DEBUG] Attempt {attempt + 1}")
@@ -268,18 +306,40 @@ def execute_query_with_retry(
                 print(f"[DEBUG] Validated SQL:\n{sanitised_sql}\n")
 
             # Check freshness before executing
-            if mongo_db and not skip_freshness:
-                tickers = extract_tickers_from_sql(sanitised_sql)
-                if tickers:
-                    freshness = check_data_freshness(mongo_db, tickers)
-                    if freshness["is_stale"]:
-                        print(f"\n☢\u2005 Warning: Data for {', '.join(freshness['stale_tickers'])} may be stale")
-                        print(f"   Run: python ingest.py --refresh --tickers {','.join(tickers)}")
+            if mongo_db and not skip_freshness and tickers:
+                freshness = check_data_freshness(mongo_db, tickers)
+                freshness_details = freshness.get("freshness_info", {})
+                freshness_status = freshness.get("status", "ok")
+                if freshness_status == "unknown":
+                    log_event(logger, phase="query.freshness_timeout", tickers=list(tickers))
+                if freshness["is_stale"]:
+                    print(f"\n☢\u2005 Warning: Data for {', '.join(freshness['stale_tickers'])} may be stale")
+                    print(f"   Run: python ingest.py --refresh --tickers {','.join(tickers)}")
+
+            cached_df = cache.get(sanitised_sql) if cache else None
+            if cached_df is not None:
+                df = cached_df
+                columns = list(df.columns)
+                rows = [tuple(row) for row in df.itertuples(index=False, name=None)]
+                query_time = time.time() - start_time
+                log_event(
+                    logger,
+                    phase="query.success",
+                    attempt=attempt + 1,
+                    sql=sanitised_sql,
+                    rows=len(rows),
+                    cache_hit=True,
+                    duration_ms=int(query_time * 1000),
+                )
+                if cache:
+                    cache.record_query_latency(query_time)
+                return (columns, rows, sanitised_sql, df)
 
             # Execute query
             result = conn.execute(sanitised_sql)
             columns = [desc[0] for desc in result.description]
             rows = result.fetchall()
+            query_time = time.time() - start_time
 
             # Create DataFrame for visualization
             df = pd.DataFrame(rows, columns=columns)
@@ -291,9 +351,32 @@ def execute_query_with_retry(
                 attempt=attempt + 1,
                 sql=sanitised_sql,
                 rows=len(rows),
+                duration_ms=int(query_time * 1000),
             )
 
+            if cache and not df.empty:
+                metadata = build_cache_metadata(tickers, freshness_details, freshness_status)
+                cache.set(sanitised_sql, df, metadata=metadata)
+            if cache:
+                cache.record_query_latency(query_time)
+
             return (columns, rows, sanitised_sql, df)
+
+        except SemanticValidationError as exc:
+            message = str(exc)
+            print(f"\n❌ Semantic validation failed: {message}")
+            log_event(
+                logger,
+                phase="query.semantic_validation",
+                attempt=attempt + 1,
+                error=message,
+            )
+            feedback = (
+                f"The previous SQL was rejected because {message}. "
+                "Ensure the SQL matches the financial question's intent (correct GROUP BY, qualified columns, safe casts)."
+            )
+            conversation_history.append({"role": "system", "content": feedback})
+            continue
 
         except (ValueError, duckdb.Error) as exc:
             error_msg = str(exc)
@@ -409,6 +492,7 @@ def process_query(
     skip_freshness: bool,
     debug: bool,
     query_history: Optional[QueryHistory],
+    cache: Optional["QueryCache"],
 ):
     """
     Process a user's query.
@@ -426,6 +510,7 @@ def process_query(
         skip_freshness,
         user_input,
         debug,
+        cache=cache,
     )
 
     if result:
@@ -467,10 +552,7 @@ def process_query(
         if conversation_history and conversation_history[-1]["role"] == "user":
             conversation_history.pop()
 
-    if len(conversation_history) > MAX_HISTORY_LENGTH + 1:
-        system_prompt = [conversation_history[0]] if conversation_history and conversation_history[0]["role"] == "system" else []
-        recent_messages = conversation_history[-MAX_HISTORY_LENGTH:]
-        conversation_history = system_prompt + recent_messages
+    enforce_history_window(conversation_history)
 
     print()
 
@@ -484,6 +566,7 @@ def run_chat_loop(
     mongo_db: Optional[Database],
     skip_freshness: bool,
     debug: bool = False,
+    cache: Optional["QueryCache"] = None,
 ) -> None:
     """Main chat loop with conversation history."""
     system_prompt = build_system_prompt(schema)
@@ -494,7 +577,7 @@ def run_chat_loop(
     query_history = None
     if QUERY_INTELLIGENCE_AVAILABLE:
         try:
-            query_history = QueryHistory()
+            query_history = QueryHistory(max_records=CHAT_HISTORY_DB_LIMIT)
         except Exception as e:
             print(f"Warning: Could not initialize query history: {e}")
 
@@ -524,6 +607,7 @@ def run_chat_loop(
                 skip_freshness,
                 debug,
                 query_history,
+                cache,
             )
 
         except KeyboardInterrupt:
@@ -562,7 +646,7 @@ def main() -> None:
         raise SystemExit("OLLAMA_URL is not set.")
 
     # Connect to DuckDB
-    conn = duckdb.connect("financial_data.duckdb")
+    conn = duckdb.connect(str(get_duckdb_path()))
     schema = introspect_schema(conn, ALLOWED_TABLES)
     if not schema:
         conn.close()
@@ -571,6 +655,14 @@ def main() -> None:
     # Setup logging
     logger = configure_logger("chat")
     log_event(logger, phase="chat.start", model=model)
+
+    cache = None
+    if CACHE_AVAILABLE:
+        try:
+            cache_config = load_config()
+            cache = get_query_cache(cache_config)
+        except Exception as exc:
+            logger.warning(f"Cache initialization failed: {exc}")
 
     # Load MongoDB for freshness checking
     mongo_db = None
@@ -594,6 +686,7 @@ def main() -> None:
             mongo_db,
             args.skip_freshness_check,
             args.debug,
+            cache,
         )
     finally:
         conn.close()

@@ -1,0 +1,7 @@
+[tool.pytest.ini_options]
+addopts = "-q"
+
+[project]
+name = "finangpt"
+version = "0.0.0"
+dependencies = []

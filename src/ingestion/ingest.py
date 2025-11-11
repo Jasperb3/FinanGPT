@@ -29,6 +29,7 @@ from pymongo.errors import PyMongoError
 
 from src.core.time_utils import parse_utc_timestamp
 from src.core.config_loader import load_config
+from src.query_engine.query import invalidate_cache_for_tickers
 
 # Import concurrent ingestion module
 try:
@@ -47,11 +48,10 @@ from src.utils.common import is_numeric, as_text_fallback
 # The original local function was: def _as_text(value: Any) -> str: return str(value or "").strip()
 _as_text = as_text_fallback  # Map the shared function to the local name for compatibility
 
-MAX_TICKERS_PER_RUN = 50
+DEFAULT_MAX_TICKERS_PER_RUN = 50
 MAX_ATTEMPTS = 3
 EST = ZoneInfo("US/Eastern")
 UTC = ZoneInfo("UTC")
-LOGS_DIR = Path("logs")
 PRICE_LOOKBACK_DAYS = int(os.getenv("PRICE_LOOKBACK_DAYS", "365"))
 
 ALLOWED_EQUITY_TYPES = {
@@ -124,6 +124,19 @@ FIELD_MAPPINGS: Dict[str, Sequence[str]] = {
 ESTIMATED_BACKOFF_SECONDS = (1, 2, 4)
 
 
+def get_max_tickers_per_run() -> int:
+    """Read the maximum ticker batch size from configuration."""
+
+    try:
+        config = load_config()
+        ingestion_cfg = config.get('ingestion', {}) if hasattr(config, 'get') else {}
+        value = ingestion_cfg.get('max_tickers_per_batch', DEFAULT_MAX_TICKERS_PER_RUN)
+        value_int = int(value)
+        return value_int if value_int > 0 else DEFAULT_MAX_TICKERS_PER_RUN
+    except Exception:
+        return DEFAULT_MAX_TICKERS_PER_RUN
+
+
 class UnsupportedInstrument(RuntimeError):
     """Raised when a ticker fails ETF, currency, or domicile checks."""
 
@@ -179,15 +192,16 @@ def read_tickers(args: argparse.Namespace, logger: logging.Logger) -> List[str]:
             seen.add(ticker)
     if not ordered:
         raise SystemExit("No tickers provided.")
-    if len(ordered) > MAX_TICKERS_PER_RUN:
+    max_tickers = get_max_tickers_per_run()
+    if len(ordered) > max_tickers:
         log_event(
             logger,
             phase="ingest",
             ticker="*",
             level="warning",
-            message=f"Limiting run to first {MAX_TICKERS_PER_RUN} tickers.",
+            message=f"Limiting run to first {max_tickers} tickers (ingestion.max_tickers_per_batch).",
         )
-        ordered = ordered[:MAX_TICKERS_PER_RUN]
+        ordered = ordered[:max_tickers]
     return ordered
 
 
@@ -1455,6 +1469,10 @@ def main() -> None:
             # Print summary
             print_ingestion_summary(results)
 
+            success_tickers = [ticker for ticker, outcome in results.items() if outcome.status == "success"]
+            if success_tickers:
+                invalidate_cache_for_tickers(success_tickers)
+
             log_event(logger, phase="concurrent.complete",
                      success_count=sum(1 for r in results.values() if r.status == "success"),
                      total_count=len(results))
@@ -1472,6 +1490,7 @@ def main() -> None:
                     force_mode=args.force,
                     refresh_days=args.refresh_days,
                 )
+                invalidate_cache_for_tickers([ticker])
 
 
 if __name__ == "__main__":

@@ -18,8 +18,11 @@ import json
 import logging
 import sys
 from datetime import datetime, UTC
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional
+
+from src.utils.paths import get_logs_dir
 
 
 class JSONFormatter(logging.Formatter):
@@ -52,10 +55,12 @@ class JSONFormatter(logging.Formatter):
 
 def configure_logger(
     name: str,
-    log_dir: str = 'logs',
+    log_dir: Optional[str] = None,
     level: str = 'INFO',
     log_format: str = 'json',
-    console_output: bool = True
+    console_output: bool = True,
+    max_bytes: Optional[int] = None,
+    backup_count: Optional[int] = None,
 ) -> logging.Logger:
     """
     Configure logger with consistent settings.
@@ -84,12 +89,20 @@ def configure_logger(
     logger.propagate = False
 
     # Create log directory
-    log_path = Path(log_dir)
-    log_path.mkdir(exist_ok=True)
+    log_path = Path(log_dir) if log_dir else get_logs_dir()
+    log_path.mkdir(parents=True, exist_ok=True)
 
-    # File handler
-    log_file = log_path / f"{name.replace('.', '_')}_{datetime.now(UTC):%Y%m%d}.log"
-    file_handler = logging.FileHandler(log_file)
+    max_bytes_value = max_bytes if max_bytes and max_bytes > 0 else 10 * 1024 * 1024
+    backup_count_value = backup_count if backup_count is not None else 5
+
+    # File handler with rotation
+    log_file = log_path / f"{name.replace('.', '_')}.log"
+    file_handler = RotatingFileHandler(
+        log_file,
+        maxBytes=max_bytes_value,
+        backupCount=max(backup_count_value, 1),
+        encoding='utf-8',
+    )
 
     if log_format == 'json':
         file_handler.setFormatter(JSONFormatter())
@@ -160,9 +173,26 @@ def get_logger(name: str, config: Optional[dict] = None) -> logging.Logger:
 
     log_config = config.get('logging', {})
 
+    max_bytes = None
+    if 'max_file_size_mb' in log_config:
+        try:
+            max_bytes = int(float(log_config['max_file_size_mb']) * 1024 * 1024)
+        except (ValueError, TypeError):
+            max_bytes = None
+
+    backup_count = log_config.get('backup_count')
+    if backup_count is not None:
+        try:
+            backup_count = int(backup_count)
+        except (ValueError, TypeError):
+            backup_count = None
+
     return configure_logger(
         name=name,
         log_dir=log_config.get('directory', 'logs'),
         level=log_config.get('level', 'INFO'),
         log_format=log_config.get('format', 'json'),
+        console_output=log_config.get('console_output', True),
+        max_bytes=max_bytes,
+        backup_count=backup_count,
     )

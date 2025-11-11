@@ -14,6 +14,8 @@ from typing import List, Dict, Optional, Tuple
 from pathlib import Path
 import pandas as pd
 
+from src.utils.paths import get_history_db_path
+
 
 class QueryHistory:
     """
@@ -27,14 +29,15 @@ class QueryHistory:
     - Export history to CSV
     """
 
-    def __init__(self, db_path: str = "query_history.db"):
+    def __init__(self, db_path: Optional[str] = None, max_records: int = 1000):
         """
         Initialize QueryHistory with database connection.
 
         Args:
             db_path: Path to SQLite database file
         """
-        self.db_path = db_path
+        self.db_path = db_path or str(get_history_db_path())
+        self.max_records = max_records
         self._init_database()
 
     def _init_database(self):
@@ -106,7 +109,34 @@ class QueryHistory:
         conn.commit()
         conn.close()
 
+        self._prune_history()
+
         return query_id
+
+    def _prune_history(self) -> None:
+        """Keep stored rows within the configured limit."""
+
+        if not self.max_records or self.max_records <= 0:
+            return
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT id FROM queries ORDER BY timestamp DESC, id DESC")
+        rows = cursor.fetchall()
+
+        if len(rows) <= self.max_records:
+            conn.close()
+            return
+
+        ids_to_delete = [row[0] for row in rows[self.max_records:]]
+        for idx in range(0, len(ids_to_delete), 500):
+            chunk = ids_to_delete[idx:idx + 500]
+            placeholders = ",".join(["?"] * len(chunk))
+            cursor.execute(f"DELETE FROM queries WHERE id IN ({placeholders})", chunk)
+
+        conn.commit()
+        conn.close()
 
     def mark_favorite(self, query_id: int, is_favorite: bool = True):
         """

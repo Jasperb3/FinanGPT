@@ -15,11 +15,13 @@ import matplotlib.dates as mdates
 import pandas as pd
 from matplotlib.figure import Figure
 
+from src.utils.paths import get_charts_dir, get_chart_retention_limit, prune_old_charts
+
 # Use non-interactive backend for server environments
 matplotlib.use('Agg')
 
-CHARTS_DIR = Path("charts")
-CHARTS_DIR.mkdir(exist_ok=True)
+CHARTS_DIR = get_charts_dir()
+CHART_RETENTION_LIMIT = get_chart_retention_limit()
 
 # Chart type keywords for intent detection
 CHART_KEYWORDS = {
@@ -105,15 +107,19 @@ def create_chart(
 
     try:
         if chart_type == 'line':
-            return create_line_chart(df, title)
+            path = create_line_chart(df, title)
         elif chart_type == 'bar':
-            return create_bar_chart(df, title)
+            path = create_bar_chart(df, title)
         elif chart_type == 'scatter':
-            return create_scatter_plot(df, title)
+            path = create_scatter_plot(df, title)
         elif chart_type == 'candlestick':
-            return create_candlestick_chart(df, title)
+            path = create_candlestick_chart(df, title)
         else:
-            return None
+            path = None
+
+        if path:
+            prune_old_charts(CHART_RETENTION_LIMIT)
+        return path
     except Exception as e:
         print(f"⚠️  Chart creation failed: {e}")
         return None

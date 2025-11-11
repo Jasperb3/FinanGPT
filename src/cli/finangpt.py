@@ -25,6 +25,8 @@ from pymongo import MongoClient
 
 from src.core.config_loader import load_config
 from src.core.time_utils import parse_utc_timestamp
+from src.query.cache import read_persisted_metrics
+from src.utils.paths import get_duckdb_path
 
 
 def get_status(config_path: Optional[str] = None) -> dict:
@@ -93,7 +95,7 @@ def get_status(config_path: Optional[str] = None) -> dict:
 
     # Check DuckDB
     try:
-        conn = duckdb.connect(config.duckdb_path, read_only=True)
+        conn = duckdb.connect(str(get_duckdb_path(config)), read_only=True)
         status["database"]["duckdb"] = "connected"
 
         # Get table counts
@@ -128,8 +130,31 @@ def get_status(config_path: Optional[str] = None) -> dict:
     status["configuration"]["ollama_url"] = config.ollama_url
     status["configuration"]["model"] = config.model_name
     status["configuration"]["duckdb_path"] = config.duckdb_path
+    ingestion_cfg = config.get('ingestion', {}) if hasattr(config, 'get') else {}
+    status["configuration"]["ingestion_max_batch"] = ingestion_cfg.get('max_tickers_per_batch', 50)
+    status["metrics"] = build_metrics_summary()
 
     return status
+
+
+def build_metrics_summary() -> dict:
+    data = read_persisted_metrics()
+    hits = int(data.get('hits', 0))
+    misses = int(data.get('misses', 0))
+    total = hits + misses
+    hit_rate = (hits / total * 100) if total else 0
+    latency_samples = int(data.get('latency_samples', 0))
+    latency_total = float(data.get('latency_total', 0.0))
+    avg_latency_ms = ((latency_total / latency_samples) * 1000) if latency_samples else 0
+
+    return {
+        'hits': hits,
+        'misses': misses,
+        'total_requests': total,
+        'cache_hit_rate_pct': hit_rate,
+        'latency_samples': latency_samples,
+        'avg_latency_ms': avg_latency_ms,
+    }
 
 
 def print_status(status: dict) -> None:
@@ -173,6 +198,15 @@ def print_status(status: dict) -> None:
     print(f"  DuckDB: {config['duckdb_path']}")
     print(f"  Ollama: {config['ollama_url']}")
     print(f"  Model: {config['model']}")
+    if "ingestion_max_batch" in config:
+        print(f"  Ingest batch cap: {config['ingestion_max_batch']}")
+
+    metrics = status.get("metrics") or {}
+    if metrics:
+        print("\n📈 Metrics:")
+        print(f"  Cache hit rate: {metrics['cache_hit_rate_pct']:.1f}% ({metrics['hits']}/{metrics.get('total_requests', 0)})")
+        print(f"  Latency samples: {metrics['latency_samples']}")
+        print(f"  Avg query latency: {metrics['avg_latency_ms']:.2f} ms")
 
     print("\n" + "=" * 70 + "\n")
 
@@ -281,6 +315,9 @@ def run_status(args: argparse.Namespace) -> int:
     """
     try:
         status = get_status(args.config)
+        if args.metrics_json:
+            print(json.dumps(status.get("metrics", {}), indent=2))
+            return 0
         if args.json:
             print(json.dumps(status, indent=2))
         else:
@@ -386,6 +423,7 @@ def main() -> int:
     # Status command
     status_parser = subparsers.add_parser("status", help="Check system status")
     status_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    status_parser.add_argument("--metrics-json", action="store_true", help="Output metrics summary as JSON")
 
     # Refresh command
     refresh_parser = subparsers.add_parser("refresh", help="Full refresh workflow")
