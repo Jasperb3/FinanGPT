@@ -11,3 +11,6 @@ openpyxl
 pyyaml
 tqdm
 hypothesis
+pydantic>=2.6
+pydantic-settings>=2.1
+dependency-injector>=4.41

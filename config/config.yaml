@@ -1,0 +1,85 @@
+database:
+  mongodb:
+    uri: mongodb://localhost:27017/financial_data
+    database_name: financial_data
+    pool_size: 10
+    timeout_ms: 5000
+  duckdb:
+    path: ./data/financial_data.duckdb
+    readonly: false
+    memory_limit: 2GB
+  conversation:
+    path: ./data/conversations.db
+
+llm:
+  provider: ollama
+  ollama:
+    url: http://localhost:11434
+    model: 'phi4:latest'
+    timeout: 60
+    max_retries: 3
+  generation:
+    planning_temperature: 0.1
+    analysis_temperature: 0.3
+    synthesis_temperature: 0.4
+    max_context_tokens: 4000
+    max_output_tokens: 1000
+
+ingestion:
+  max_workers: 10
+  worker_timeout: 120
+  max_tickers_per_batch: 500
+  price_lookback_days: 365
+  auto_refresh_threshold_days: 7
+  market_restrictions:
+    mode: global
+    exclude_etfs: true
+    exclude_mutualfunds: true
+
+transformation:
+  chunk_size: 1000
+  max_memory_mb: 2048
+  enable_streaming: true
+  run_integrity_checks: true
+
+analysis:
+  max_query_steps: 10
+  max_data_rows_per_step: 10000
+  enable_query_caching: true
+  cache_ttl_seconds: 300
+  v2_analysis_enabled: false
+  query_planning:
+    max_retries: 2
+    enable_validation: true
+  result_analysis:
+    max_insights: 10
+    min_confidence_threshold: 0.5
+  conversation:
+    max_history_length: 10
+    context_summary_enabled: true
+
+visualization:
+  enable: true
+  output_dir: ./data/charts
+  dpi: 300
+  default_style: seaborn-v0_8
+  max_chart_retention: 1000
+
+logging:
+  level: INFO
+  format: json
+  directory: ./data/logs
+  max_file_size_mb: 10
+  backup_count: 5
+  structured:
+    enable: true
+    include_context: true
+
+cache:
+  redis_url: redis://localhost:6379/0
+  default_ttl_seconds: 300
+  enabled: true
+
+monitoring:
+  enable_metrics: false
+  metrics_port: 9090
