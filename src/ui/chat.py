@@ -9,6 +9,8 @@ import logging
 import os
 import sys
 import time
+import warnings
+import uuid
 from datetime import UTC, datetime
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, TYPE_CHECKING
 
@@ -83,6 +85,7 @@ except ImportError:
 MAX_RETRIES = 3
 MAX_HISTORY_LENGTH = 20  # Limit conversation history to avoid token overflow
 CHAT_HISTORY_DB_LIMIT = int(os.getenv("CHAT_HISTORY_DB_LIMIT", "500"))
+_LEGACY_WARNING_EMITTED = False
 
 
 # ============================================================================
@@ -634,7 +637,18 @@ def main() -> None:
         action="store_true",
         help="Enable comprehensive debug logging (Phase 6).",
     )
+    parser.add_argument(
+        "--use-orchestrator",
+        action="store_true",
+        help="Route prompts through the FinanGPT v2 analysis orchestrator (beta).",
+    )
     args = parser.parse_args()
+
+    if _is_orchestrator_enabled(args.use_orchestrator):
+        run_orchestrator_session()
+        return
+
+    _warn_legacy_path()
 
     # Load environment
     load_dotenv()
@@ -691,6 +705,57 @@ def main() -> None:
     finally:
         conn.close()
         log_event(logger, phase="chat.end")
+
+
+def _is_orchestrator_enabled(flag: bool) -> bool:
+    if flag:
+        return True
+    return os.getenv("FINANGPT_V2_ANALYSIS", "false").lower() in {"1", "true", "yes", "on"}
+
+
+def _warn_legacy_path() -> None:
+    global _LEGACY_WARNING_EMITTED
+    if _LEGACY_WARNING_EMITTED:
+        return
+    warnings.warn(
+        "FinanGPT legacy chat path is deprecated. Use --use-orchestrator or set FINANGPT_V2_ANALYSIS=true.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    _LEGACY_WARNING_EMITTED = True
+
+
+def run_orchestrator_session() -> None:
+    from finangpt.shared.dependency_injection import Container
+
+    container = Container()
+    orchestrator = container.analysis_orchestrator()
+    conversation_id = str(uuid.uuid4())
+    print("\n🚀 FinanGPT v2 Orchestrator Mode (beta)")
+    print("Type /exit to quit. Questions are processed end-to-end by the analysis pipeline.\n")
+
+    while True:
+        try:
+            user_input = input("💬 Question> ").strip()
+            if not user_input:
+                continue
+            if user_input.lower() in {"/exit", "/quit"}:
+                break
+            start = time.perf_counter()
+            result = orchestrator.analyze_question(user_input, conversation_id=conversation_id)
+            duration_ms = (time.perf_counter() - start) * 1000
+            print(f"\n🧠 Answer ({duration_ms:.0f} ms):\n{result.answer}\n")
+            if result.visualization_hints:
+                print("📈 Suggested charts:")
+                for hint in result.visualization_hints:
+                    print(f" - {hint.chart_type}: {hint.description} ({', '.join(hint.fields)})")
+                print()
+            for step, frame in result.data_by_step.items():
+                print(f"Step {step}: {len(frame)} rows")
+            print()
+        except KeyboardInterrupt:
+            print("\n\n👋 Interrupted. Goodbye!")
+            break
 
 
 if __name__ == "__main__":

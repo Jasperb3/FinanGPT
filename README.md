@@ -105,6 +105,7 @@ MONGO_URI=mongodb://localhost:27017/financial_data
 OLLAMA_URL=http://localhost:11434
 MODEL_NAME=gpt-oss:latest
 PRICE_LOOKBACK_DAYS=365
+FINANGPT_V2_ANALYSIS=true
 EOF
 
 # 4. Start services
@@ -175,6 +176,13 @@ python ingest.py --tickers AAPL,MSFT
 python transform.py
 ```
 
+### ⚙️ FinanGPT v2 Orchestrator Mode
+
+- `.env.example` now sets `FINANGPT_V2_ANALYSIS=true`, so the new multi-step analysis pipeline is enabled by default for local development.
+- Use `--use-orchestrator` on `chat.py` or `query.py` (and the equivalent `finangpt.py chat/query` commands) to explicitly route a session through the orchestrator even if the env var is disabled.
+- The legacy path is still available for compatibility, but it now emits a `DeprecationWarning` so you know when the older flow is being exercised.
+- CI and production hosts can flip between modes simply by toggling `FINANGPT_V2_ANALYSIS`.
+
 ### 📂 Data Directory Layout & Retention
 
 - **Data dir**: All mutable artefacts live under `${FINANGPT_DATA_DIR:-./data}` (DuckDB, logs, charts, tmp, cache metrics, query history). Set `FINANGPT_DATA_DIR` before running commands if you want to relocate storage.
@@ -189,6 +197,7 @@ python transform.py
 1. Install dependencies (Hypothesis for fuzzing): `pip install -r requirements.txt`.
 2. Run the full suite with `PYTHONPATH=.:src pytest -q`.
 3. Guardrail fuzz tests (`tests/test_sql_validator_fuzz.py`) will fail immediately if dangerous SQL slips past the validator—run them whenever touching query or security code.
+4. Coverage is enforced at **≥90%** via `pytest --cov`; test runs fail automatically if the threshold is not met.
 
 ---
 

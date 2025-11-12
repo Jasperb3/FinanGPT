@@ -151,8 +151,10 @@ def load_config(config_path: Optional[str] = None) -> Config:
     2. config.yaml file
     3. Default values
     """
+    use_env_overrides = config_path is None
+
     # Load environment variables from .env only when using default config path.
-    if config_path is None:
+    if use_env_overrides:
         load_dotenv()
 
     # Try to load config file

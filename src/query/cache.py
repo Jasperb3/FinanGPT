@@ -15,6 +15,7 @@ Author: FinanGPT Enhancement Plan 3
 Created: 2025-11-09
 """
 
+import os
 from typing import Optional, Dict, Tuple, Any, Callable, Sequence
 from time import time
 from functools import wraps
@@ -29,6 +30,7 @@ from src.utils.paths import get_cache_metrics_path
 
 
 DEFAULT_METRICS_PATH = get_cache_metrics_path()
+DISABLE_METRICS = os.getenv("FINANGPT_DISABLE_CACHE_METRICS", "0").lower() in {"1", "true", "yes", "on"}
 
 
 class QueryCache:
@@ -81,9 +83,11 @@ class QueryCache:
         self._misses = 0
         self._latency_total = 0.0
         self._latency_samples = 0
+        self._metrics_disabled = DISABLE_METRICS and metrics_path is None
         self._metrics_path = Path(metrics_path) if metrics_path else DEFAULT_METRICS_PATH
-        self._metrics_path.parent.mkdir(parents=True, exist_ok=True)
-        self._load_metrics()
+        if not self._metrics_disabled:
+            self._metrics_path.parent.mkdir(parents=True, exist_ok=True)
+            self._load_metrics()
 
     def _normalize_sql(self, sql: str) -> str:
         """
@@ -113,7 +117,7 @@ class QueryCache:
         return hashlib.md5(normalized.encode()).hexdigest()
 
     def _load_metrics(self) -> None:
-        if not self._metrics_path.exists():
+        if self._metrics_disabled or not self._metrics_path.exists():
             return
         try:
             data = json.loads(self._metrics_path.read_text(encoding='utf-8'))
@@ -126,6 +130,8 @@ class QueryCache:
         self._latency_samples = int(data.get('latency_samples', self._latency_samples))
 
     def _save_metrics(self) -> None:
+        if self._metrics_disabled:
+            return
         data = {
             'hits': self._hits,
             'misses': self._misses,

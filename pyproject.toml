@@ -1,5 +1,9 @@
 [tool.pytest.ini_options]
-addopts = "-q"
+addopts = "-q --cov=src/finangpt --cov=tests --cov-report=term-missing --cov-fail-under=90"
+markers = [
+    "integration: Integration tests (may depend on external services)",
+    "e2e: End-to-end acceptance scenarios",
+]
 
 [project]
 name = "finangpt"

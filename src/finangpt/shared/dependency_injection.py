@@ -3,34 +3,40 @@
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass
 from typing import Any
 
 import duckdb
 import pymongo
 from dependency_injector import containers, providers
 
-from .config import AppConfig, load_config
+from finangpt.application.analysis.data_retriever import DataRetriever
+from finangpt.application.analysis.insight_synthesizer import InsightSynthesizer
+from finangpt.application.analysis.orchestrator import AnalysisOrchestrator
+from finangpt.application.analysis.query_planner import QueryPlanner
+from finangpt.application.analysis.result_analyzer import ResultAnalyzer
+from finangpt.application.analysis.visualization_detector import VisualizationDetector
+from finangpt.application.conversation.context_builder import ContextBuilder
+from finangpt.application.conversation.conversation_manager import ConversationManager
+from finangpt.infrastructure.conversation.sqlite_repository import SQLiteConversationRepository
+from finangpt.infrastructure.llm.ollama_service import OllamaLLMService
 
-__all__ = ["Container"]
+from .config import load_config
 
-
-class OllamaLLMService:
-    """Minimal stub for the Ollama-backed LLM service."""
-
-    def __init__(self, base_url: str, model: str, timeout: int, max_retries: int = 3) -> None:
-        self.base_url = base_url
-        self.model = model
-        self.timeout = timeout
-        self.max_retries = max_retries
-
-    def generate(self, prompt: str) -> str:  # pragma: no cover - illustrative stub
-        return f"[LLM:{self.model}] {prompt}"
+__all__ = [
+    "Container",
+    "DuckDBFinancialRepository",
+    "RedisCacheRepository",
+]
 
 
 class DuckDBFinancialRepository:
     def __init__(self, connection: duckdb.DuckDBPyConnection) -> None:
         self._connection = connection
+
+    def execute(self, sql: str) -> "pd.DataFrame":
+        import pandas as pd
+
+        return self._connection.execute(sql).fetchdf()
 
 
 class MongoDBRawDataRepository:
@@ -53,87 +59,13 @@ class RedisCacheRepository:
         return self._cache.get(key)
 
 
-class SQLiteConversationRepository:
-    def __init__(self, path: str) -> None:
-        self._path = path
-        self._connection = sqlite3.connect(path)
-
-
 class DuckDBSchemaProvider:
     def __init__(self, connection: duckdb.DuckDBPyConnection) -> None:
         self._connection = connection
 
     def get_schema_description(self) -> str:  # pragma: no cover - stub
-        return "Stub schema description"
-
-
-class QueryPlanner:
-    def __init__(self, llm_service: OllamaLLMService, schema_provider: DuckDBSchemaProvider) -> None:
-        self._llm = llm_service
-        self._schema = schema_provider
-
-
-class DataRetriever:
-    def __init__(
-        self,
-        repository: DuckDBFinancialRepository,
-        cache_repository: RedisCacheRepository,
-        config: Any,
-    ) -> None:
-        self._repository = repository
-        self._cache = cache_repository
-        self._config = config
-
-
-class ResultAnalyzer:
-    def __init__(self, llm_service: OllamaLLMService) -> None:
-        self._llm = llm_service
-
-
-class InsightSynthesizer:
-    def __init__(self, llm_service: OllamaLLMService) -> None:
-        self._llm = llm_service
-
-
-class VisualizationDetector:
-    def __init__(self, llm_service: OllamaLLMService) -> None:
-        self._llm = llm_service
-
-
-class ContextBuilder:
-    def __init__(self, llm_service: OllamaLLMService) -> None:
-        self._llm = llm_service
-
-
-class ConversationManager:
-    def __init__(
-        self,
-        conversation_repo: SQLiteConversationRepository,
-        context_builder: ContextBuilder,
-    ) -> None:
-        self._repo = conversation_repo
-        self._context_builder = context_builder
-
-
-@dataclass
-class AnalysisPipelineComponents:
-    query_planner: QueryPlanner
-    data_retriever: DataRetriever
-    result_analyzer: ResultAnalyzer
-    insight_synthesizer: InsightSynthesizer
-    viz_detector: VisualizationDetector
-    conversation_manager: ConversationManager
-
-
-class AnalysisOrchestrator:
-    def __init__(self, components: AnalysisPipelineComponents) -> None:
-        self._components = components
-
-    def run(self, question: str) -> dict[str, Any]:  # pragma: no cover - stub
-        return {
-            "question": question,
-            "steps": ["plan", "retrieve", "analyze", "synthesize", "visualize"],
-        }
+        tables = self._connection.execute("SHOW TABLES").fetchall()
+        return "\n".join(table[0] for table in tables)
 
 
 class Container(containers.DeclarativeContainer):
@@ -229,25 +161,22 @@ class Container(containers.DeclarativeContainer):
     context_builder = providers.Factory(
         ContextBuilder,
         llm_service=llm_service,
+        summary_enabled=config.provided.analysis.conversation.context_summary_enabled,
     )
 
     conversation_manager = providers.Factory(
         ConversationManager,
         conversation_repo=conversation_repository,
         context_builder=context_builder,
+        history_limit=config.provided.analysis.conversation.max_history_length,
     )
 
-    pipeline_components = providers.Factory(
-        AnalysisPipelineComponents,
+    analysis_orchestrator = providers.Factory(
+        AnalysisOrchestrator,
         query_planner=query_planner,
         data_retriever=data_retriever,
         result_analyzer=result_analyzer,
         insight_synthesizer=insight_synthesizer,
         viz_detector=visualization_detector,
         conversation_manager=conversation_manager,
-    )
-
-    analysis_orchestrator = providers.Factory(
-        AnalysisOrchestrator,
-        components=pipeline_components,
     )

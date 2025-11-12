@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import time
+import warnings
 from datetime import UTC, datetime, timedelta, date
 from decimal import Decimal
 from pathlib import Path
@@ -421,6 +422,10 @@ _SEMANTIC_VALIDATION_TOGGLE = (
 DEFAULT_LIMIT = _QUERY_DEFAULT_LIMIT
 MAX_LIMIT = _QUERY_MAX_LIMIT
 DEFAULT_STALENESS_THRESHOLD_DAYS = 7
+
+if os.getenv("FINANGPT_LEGACY_LIMITS", "0").lower() in {"1", "true", "yes", "on"}:
+    DEFAULT_LIMIT = LEGACY_DEFAULT_LIMIT
+    MAX_LIMIT = LEGACY_MAX_LIMIT
 
 _SECURITY_SETTINGS = None
 
@@ -1215,7 +1220,7 @@ def validate_sql(
         raise ValueError("Only single-statement SQL is allowed (semicolon detected).")
     statement_start = cleaned_lower.lstrip()
     if not statement_start.startswith(("select", "with")):
-        raise ValueError("Only SELECT/CTE statements are permitted.")
+        raise ValueError("Only SELECT statements are permitted.")
     main_select_idx = find_main_select_index(cleaned)
     if main_select_idx == -1:
         raise ValueError("Only SELECT statements are permitted.")
@@ -1227,11 +1232,12 @@ def validate_sql(
         r'\bALTER\b', r'\bCREATE\b', r'\bTRUNCATE\b', r'\bGRANT\b',
         r'\bREVOKE\b', r'\bEXECUTE\b', r'\bEXEC\b', r'\bREPLACE\b',
         r'\bXP_\b', r'\bSP_\b',  # SQL Server stored procedures
-        r'\bUNION\b.*\bSELECT\b',  # UNION injection
         r'\bINTO\s+OUTFILE\b',  # File operations
         r'\bLOAD_FILE\b',  # MySQL file operations
         r'@@', r'CHAR\(', r'CHR\(',  # Obfuscation techniques
     ]
+    if not allow_union:
+        dangerous_patterns.append(r'\bUNION\b.*\bSELECT\b')
 
     for pattern in dangerous_patterns:
         if re.search(pattern, cleaned, re.IGNORECASE):
@@ -1251,11 +1257,8 @@ def validate_sql(
     if limit_match:
         value = int(limit_match.group(1))
         if value > effective_max_limit:
-            cleaned = re.sub(
-                r"(?i)\blimit\s+\d+\b",
-                f"LIMIT {effective_max_limit}",
-                cleaned,
-                count=1,
+            raise ValueError(
+                f"LIMIT {value} exceeds the maximum allowed of {effective_max_limit}"
             )
     else:
         cleaned = f"{cleaned} LIMIT {effective_default_limit}"
@@ -1534,11 +1537,21 @@ def main() -> None:
         action="store_true",
         help="Enable comprehensive debug logging.",
     )
+    parser.add_argument(
+        "--use-orchestrator",
+        action="store_true",
+        help="Answer the question via the FinanGPT v2 analysis orchestrator.",
+    )
     args = parser.parse_args()
     load_dotenv()
     model = os.getenv("MODEL_NAME", "phi4:latest")
     base_url = os.getenv("OLLAMA_URL")
     mongo_uri = os.getenv("MONGO_URI", "")
+
+    if _is_orchestrator_enabled(args.use_orchestrator):
+        return run_orchestrator_cli(args.question)
+
+    _warn_legacy_path()
 
     # Handle --list-templates flag
     if args.list_templates:
@@ -1776,6 +1789,55 @@ def main() -> None:
     finally:
         conn.close()
 
+_QUERY_LEGACY_WARNING_EMITTED = False
+
+
+def _is_orchestrator_enabled(flag: bool) -> bool:
+    if flag:
+        return True
+    return os.getenv("FINANGPT_V2_ANALYSIS", "false").lower() in {"1", "true", "yes", "on"}
+
+
+def _warn_legacy_path() -> None:
+    global _QUERY_LEGACY_WARNING_EMITTED
+    if _QUERY_LEGACY_WARNING_EMITTED:
+        return
+    warnings.warn(
+        "FinanGPT legacy query path is deprecated. Use --use-orchestrator or set FINANGPT_V2_ANALYSIS=true.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    _QUERY_LEGACY_WARNING_EMITTED = True
+
+
+def run_orchestrator_cli(question: str | None) -> int:
+    from finangpt.shared.dependency_injection import Container
+
+    prompt = question or input("Natural language question> ").strip()
+    if not prompt:
+        print("Question is required for orchestrator mode.")
+        return 1
+
+    container = Container()
+    orchestrator = container.analysis_orchestrator()
+    result = orchestrator.analyze_question(prompt)
+
+    print("\n🧠 Answer:\n")
+    print(result.answer)
+    if result.visualization_hints:
+        print("\n📈 Suggested charts:")
+        for hint in result.visualization_hints:
+            print(f" - {hint.chart_type}: {hint.description} ({', '.join(hint.fields)})")
+
+    for step, frame in result.data_by_step.items():
+        print(f"\nStep {step} preview (rows={len(frame)}):")
+        if not frame.empty:
+            print(frame.head().to_string(index=False))
+        else:
+            print("(no rows)")
+
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

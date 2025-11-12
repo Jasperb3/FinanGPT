@@ -13,6 +13,9 @@ import duckdb  # expose for tests
 project_root = Path(__file__).parent.resolve()
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
+src_dir = project_root / "src"
+if str(src_dir) not in sys.path:
+    sys.path.insert(0, str(src_dir))
 
 os.environ.setdefault("FINANGPT_DATA_DIR", str(project_root / "data"))
 
@@ -26,7 +29,17 @@ from src.ui.chat import (  # noqa: E402
     print_welcome_message,
     print_help,
 )
-from src.query_engine.query import call_ollama_chat_with_retry  # noqa: E402
+from src.query_engine.query import (  # noqa: E402
+    build_system_prompt,
+    check_data_freshness,
+    extract_sql,
+    extract_tickers_from_sql,
+    introspect_schema,
+    load_mongo_database,
+    pretty_print,
+    validate_sql,
+    call_ollama_chat_with_retry,
+)
 
 requests = _chat_module.requests  # allow tests to patch chat.requests
 duckdb = duckdb
@@ -40,6 +53,14 @@ __all__ = [
     "execute_query_with_retry",
     "print_welcome_message",
     "print_help",
+    "build_system_prompt",
+    "check_data_freshness",
+    "extract_sql",
+    "extract_tickers_from_sql",
+    "introspect_schema",
+    "load_mongo_database",
+    "pretty_print",
+    "validate_sql",
     "requests",
     "duckdb",
 ]
@@ -67,7 +88,11 @@ def call_ollama_chat(*args, **kwargs):
     return call_ollama_chat_with_retry(*args, **kwargs)
 
 
-_chat_module.call_ollama_chat_with_retry = call_ollama_chat
+def _proxy_call_ollama_chat(*args, **kwargs):
+    return call_ollama_chat(*args, **kwargs)
+
+
+_chat_module.call_ollama_chat_with_retry = _proxy_call_ollama_chat
 
 
 def main() -> int:

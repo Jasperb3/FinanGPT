@@ -5,6 +5,7 @@ pymongo
 requests
 python-dotenv
 pytest
+pytest-cov>=4
 matplotlib
 mplfinance
 openpyxl
@@ -14,3 +15,6 @@ hypothesis
 pydantic>=2.6
 pydantic-settings>=2.1
 dependency-injector>=4.41
+httpx>=0.26
+tenacity>=8.2
+mongomock>=4.1

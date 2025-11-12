@@ -19,3 +19,5 @@ data/charts/*
 data/tmp/*
 !data/tmp/.gitkeep
 query_history.db
+.hypothesis/
+.claude/

@@ -14,6 +14,9 @@ from pymongo import MongoClient  # re-exported for status tests
 project_root = Path(__file__).parent.resolve()
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
+src_dir = project_root / "src"
+if str(src_dir) not in sys.path:
+    sys.path.insert(0, str(src_dir))
 
 os.environ.setdefault("FINANGPT_DATA_DIR", str(project_root / "data"))
 
@@ -21,6 +24,9 @@ os.environ.setdefault("FINANGPT_DATA_DIR", str(project_root / "data"))
 from src.cli.finangpt import main as cli_main, get_status, print_status
 
 __all__ = ["main", "get_status", "print_status", "duckdb", "MongoClient"]
+
+sys.modules.setdefault(f"{__name__}.duckdb", duckdb)
+sys.modules.setdefault(f"{__name__}.MongoClient", MongoClient)
 
 
 def main() -> int:
